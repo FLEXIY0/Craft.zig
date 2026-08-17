@@ -1,14 +1,17 @@
 //! A chunk's visual representation
-//! This is specific to the IO and can be modified independently of the chunk's actual representation
+//! This frontend draws nothing, so it just drops the mesh it is given
 
 const std = @import("std");
-const coord = @import("coord");
-const Chunk = @import("terrain").Chunk;
+const meshing = @import("meshing");
 
 const ChunkModel = @This();
 
-pub fn generateForChunk(_: std.mem.Allocator, _: Chunk) !ChunkModel {
-    return .{};
+/// Amount of vertices the mesh had, so that headless runs can still be checked
+vertex_count: u32 = 0,
+
+pub fn upload(_: std.mem.Allocator, data: meshing.MeshData) !ChunkModel {
+    defer data.deinit();
+    return .{ .vertex_count = data.vertexCount() };
 }
 
 pub fn deinit(_: ChunkModel, _: std.mem.Allocator) void {}

@@ -8,6 +8,7 @@ pub const Block = vec.Block;
 pub const Chunk = vec.Chunk;
 pub const Vec3f = vec.Vec3f;
 pub const Direction = @import("direction.zig").Direction;
+pub const Face = @import("direction.zig").Face;
 pub const Vec3fs = vec.Vec3fs;
 pub const raycast = @import("raycast.zig");
 

@@ -1,25 +1,32 @@
-//! Root of the meshing modules, for methods related to generating models of blocks
+//! Root of the meshing module: turning chunks into triangles.
+//!
+//! The pipeline is:
+//!
+//!   ChunkStore ──snapshot──▶ Scheduler ──job──▶ Mesher ──▶ MeshData ──▶ frontend
+//!
+//!  - `Snapshot`  an owned copy of a chunk and of its neighbors' borders
+//!  - `Scheduler` lock free job/result queues and the worker threads
+//!  - `Mesher`    the greedy pass plus the per-block pass for odd models
+//!  - `MeshData`  SoA vertex buffers, allocated so the frontend can take them
+//!
+//! Nothing in here knows about the graphics API: the frontend only receives
+//! flat attribute arrays.
 
-const coord = @import("coord");
+const std = @import("std");
 
-pub const vertices = @import("vertices.zig");
-pub const uv = @import("uv.zig");
-pub const colors = @import("colors.zig");
+pub const MeshData = @import("MeshData.zig");
+pub const Mesher = @import("Mesher.zig");
+pub const Snapshot = @import("Snapshot.zig");
+pub const Scheduler = @import("Scheduler.zig");
+pub const Layers = @import("Layers.zig");
+pub const shading = @import("shading.zig");
+pub const greedy = @import("greedy.zig");
+pub const special = @import("special.zig");
+pub const queue = @import("queue.zig");
 
-pub const Vertex = coord.Vec3fs;
+pub const Part = MeshData.Part;
+pub const VertexIdT = MeshData.VertexIdT;
 
-pub const Face = packed struct {
-    a: Vertex,
-    b: Vertex,
-    c: Vertex,
-    _: Vertex,
-};
-
-pub const Color = packed struct(u32) {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-};
-
-pub const FaceColors = [4]Color;
+test "meshing module" {
+    std.testing.refAllDecls(@This());
+}

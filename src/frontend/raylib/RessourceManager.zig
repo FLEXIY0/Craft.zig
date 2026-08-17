@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const rl = @import("raylib");
+const blocks = @import("blocks");
 
 const RessourceManager = @This();
 
@@ -38,10 +39,29 @@ pub fn loadAll(self: *RessourceManager) !void {
     try self.loadModel("res/compass.glb");
 
     // Shaders
-    try self.loadShader("chunk", null, "res/shaders/chunk.fs");
+    try self.loadShader("chunk", "res/shaders/chunk.vs", "res/shaders/chunk.fs");
+    self.setAtlasUniform("chunk");
 
     // Materials
     try self.makeMaterial("chunk", "terrain.png", "chunk");
+}
+
+/// Tells the chunk shader how the texture atlas is laid out, so that it can
+/// repeat a tile over a greedy quad without bleeding into its neighbors
+fn setAtlasUniform(self: *RessourceManager, shader_name: []const u8) void {
+    const shader = self.shaders.get(shader_name) orelse return;
+
+    const location = rl.getShaderLocation(shader.*, "atlasTile");
+    if (location < 0)
+        return;
+
+    const tile: [4]f32 = .{
+        blocks.atlas.tile_size[0],
+        blocks.atlas.tile_size[1],
+        blocks.atlas.inset[0],
+        blocks.atlas.inset[1],
+    };
+    rl.setShaderValue(shader.*, location, &tile, .vec4);
 }
 
 /// Unloads all raylib ressources

@@ -10,6 +10,7 @@ const entities = @import("entities");
 const RessourceManager = @import("RessourceManager.zig");
 const vec = @import("vec.zig");
 const ChunkModel = @import("ChunkModel.zig");
+const Frustum = @import("Frustum.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -191,7 +192,7 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             time,
             self.selected_block,
             block_id,
-            blocks.table[block_id].name,
+            blocks.nameOf(block_id),
             game.player.health,
         });
     }
@@ -232,27 +233,38 @@ pub fn drawWorld(self: GameWindow) void {
     if (self.wiremesh)
         rl.gl.rlEnableWireMode();
 
-    var chunk_it = game.world.chunk_list.iterator();
-    while (chunk_it.next()) |entry| {
-        const chunk = entry.value_ptr.*;
-        const chunk_pos = entry.key_ptr.*;
+    // The chunk store is a struct of arrays: drawing walks the dense list of
+    // loaded slots and only touches the coordinates and models of the chunks
+    const store = &game.world.store;
+    const frustum: Frustum = .fromCamera(self.camera, self.window_size.x / self.window_size.y);
+
+    var drawn: u32 = 0;
+    for (store.live.items) |slot| {
+        const chunk_pos = store.coords.get(slot);
+
+        if (!frustum.containsChunk(chunk_pos))
+            continue;
+
         if (self.f3_enabled) {
             // Draw chunk bottom/bounds (debug)
             rl.drawCubeWires(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 64, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, 16, 128, 16, .red);
             rl.drawPlane(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 0, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, .{ .x = 16, .y = 16 }, .magenta);
         }
+
         // Draw the solid part of the chunk
-        if (chunk.model) |model| {
-            model.draw(entry.key_ptr.*, self.chunk_mat);
+        if (store.model.get(slot)) |model| {
+            model.draw(chunk_pos, self.chunk_mat);
+            drawn += 1;
         }
     }
 
     // Draw the transparent part of chunks
-    chunk_it = game.world.chunk_list.iterator();
-    while (chunk_it.next()) |entry| {
-        if (entry.value_ptr.*.model) |model| {
-            model.drawTransparentLayer(entry.key_ptr.*, self.chunk_mat);
-        }
+    for (store.live.items) |slot| {
+        const chunk_pos = store.coords.get(slot);
+        if (!frustum.containsChunk(chunk_pos))
+            continue;
+        if (store.model.get(slot)) |model|
+            model.drawTransparentLayer(chunk_pos, self.chunk_mat);
     }
 
     if (self.wiremesh)

@@ -21,6 +21,21 @@ pub fn build(b: *std.Build) void {
         "Select the frontend",
     ) orelse .raylib;
 
+    const atlas_path = b.option(
+        []const u8,
+        "atlas",
+        "Path to the texture atlas descriptor (see src/blocks/atlas.zig)",
+    ) orelse "src/blocks/atlas.zig";
+
+    const mesher_threads = b.option(
+        u32,
+        "mesher-threads",
+        "Number of chunk meshing worker threads (0 = pick from the cpu count)",
+    ) orelse 0;
+
+    const build_options = b.addOptions();
+    build_options.addOption(u32, "mesher_threads", mesher_threads);
+
     // Dependencies
     const network_dep = b.dependency("network", .{});
     const spsc_queue_dep = b.dependency("spsc_queue", .{});
@@ -55,9 +70,20 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // The atlas descriptor is a swappable module: point the build at a generated
+    // file to change the texture atlas layout without touching any other code
+    const atlas_mod = b.addModule("atlas", .{
+        .root_source_file = b.path(atlas_path),
+        .target = target,
+    });
+
     const blocks_mod = b.addModule("blocks", .{
         .root_source_file = b.path("src/blocks/blocks.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "coord", .module = coord_mod },
+            .{ .name = "atlas", .module = atlas_mod },
+        },
     });
     terrain_mod.addImport("blocks", blocks_mod);
 
@@ -71,6 +97,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "tracy", .module = tracy_dep.module("tracy") },
         },
     });
+
+    // The world drives the meshing pipeline, and needs to know how many worker
+    // threads to start
+    terrain_mod.addImport("meshing", meshing_mod);
+    terrain_mod.addImport("build_options", build_options.createModule());
 
     const raylib_io_mod = b.addModule("io", .{
         .root_source_file = b.path("src/frontend/raylib/io.zig"),

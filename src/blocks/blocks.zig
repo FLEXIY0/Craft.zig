@@ -1,329 +1,52 @@
-//! List of all existing blocks
+//! Root of the blocks module.
+//!
+//! The block "database" is data-driven and fully baked at comptime:
+//!  - `definitions.zig` holds the data (a sparse list of block definitions)
+//!  - `atlas.zig` holds the texture atlas layout (meant to be generated)
+//!  - `registry.zig` bakes both into flat SoA tables and 256 bit sets
+//!
+//! Runtime code only ever manipulates `blocks.Id` values and asks the registry.
 
 const std = @import("std");
 
-pub const Block = @import("Block.zig");
-pub const BlockModel = Block.BlockModel;
+pub const atlas = @import("atlas");
+pub const registry = @import("registry.zig");
+pub const definitions = @import("definitions.zig");
 
-fn texpos(x: comptime_int, y: comptime_int) comptime_int {
-    return y * 16 + x;
-}
+pub const Block = registry.Block;
+pub const Model = registry.Model;
+pub const Tint = registry.Tint;
+pub const Flags = registry.Flags;
 
-/// Generate the blocks enum at compile time
-pub const blocks_enum = blk: {
-    @setEvalBranchQuota(5000);
-    var fields_ret: []const std.builtin.Type.EnumField = &.{};
+pub const Id = registry.Id;
+pub const Set = registry.Set;
+pub const count = registry.count;
 
-    for (table, 0..) |block_def, i| {
-        const name = (block_def.name ++ &[_]u8{0})[0..block_def.name.len :0];
-        // Block doesn't exist
-        if (name.len == 0)
-            continue;
+/// Enum of all the named blocks, generated from the definitions
+pub const Blocks = registry.Blocks;
 
-        // Check that we didn't already add that name
-        if (for (fields_ret) |existing_field| {
-            if (std.mem.eql(u8, existing_field.name, name))
-                break true;
-        } else false)
-            continue;
+// Tables
+pub const names = registry.names;
+pub const flags = registry.flags;
+pub const tex = registry.tex;
+pub const set = registry.set;
 
-        // Add to the fields
-        fields_ret = fields_ret ++ &[_]std.builtin.Type.EnumField{.{
-            .name = name,
-            .value = i,
-        }};
-    }
+// Queries
+pub const isIn = registry.isIn;
+pub const idOf = registry.idOf;
+pub const nameOf = registry.nameOf;
+pub const flagsOf = registry.flagsOf;
+pub const modelOf = registry.modelOf;
+pub const tintOf = registry.tintOf;
+pub const texOf = registry.texOf;
+pub const isInvisible = registry.isInvisible;
+pub const isOpaqueCube = registry.isOpaqueCube;
+pub const isFullCube = registry.isFullCube;
+pub const isTransparent = registry.isTransparent;
+pub const hasHitbox = registry.hasHitbox;
+pub const hasSpecialModel = registry.hasSpecialModel;
 
-    // Reify
-    const enum_ret: std.builtin.Type.Enum = .{
-        .decls = &.{},
-        .fields = fields_ret,
-        .is_exhaustive = false,
-        .tag_type = u8,
-    };
-    break :blk @Type(.{ .@"enum" = enum_ret });
-};
-
-/// Table of all block types
-pub const table = [256]Block{
-    // 0
-    .{ .name = "air", .flags = .{ .hitbox = false, .transparent = true } },
-    .{ .name = "stone", .tex_id = 1 },
-    .{ .name = "grass", .tex_id = 3, .top_tex_id = 0, .bottom_tex_id = 2, .flags = .{ .model = .full_barrel } },
-    .{ .name = "dirt", .tex_id = 2 },
-    .{ .name = "cobblestone", .tex_id = texpos(0, 1) },
-    .{ .name = "wood", .tex_id = 4 },
-    .{ .name = "sapling", .tex_id = 15, .flags = .{ .transparent = true, .hitbox = false } },
-    .{ .name = "bedrock", .tex_id = texpos(1, 1) },
-    .{ .name = "water", .tex_id = texpos(15, 12), .flags = .{ .transparent = true, .hitbox = false } },
-    .{ .name = "water", .tex_id = texpos(15, 12), .flags = .{ .model = .liquid_still, .transparent = true, .hitbox = false } },
-    .{ .name = "lava", .tex_id = texpos(15, 14), .flags = .{ .hitbox = false } },
-    .{ .name = "lava", .tex_id = texpos(15, 14), .flags = .{ .model = .liquid_still, .hitbox = false } },
-    .{ .name = "sand", .tex_id = texpos(2, 1) },
-    .{ .name = "gravel", .tex_id = texpos(3, 1) },
-    .{ .name = "oreGold", .tex_id = texpos(0, 2) },
-    .{ .name = "oreIron", .tex_id = texpos(1, 2) },
-    // 16
-    .{ .name = "oreCoal", .tex_id = texpos(2, 2) },
-    .{ .name = "log", .tex_id = texpos(4, 1), .top_tex_id = texpos(5, 1), .bottom_tex_id = texpos(5, 1), .flags = .{ .model = .full_barrel } },
-    .{ .name = "leaves", .tex_id = texpos(4, 3), .flags = .{ .transparent = true } },
-    .{},
-    .{ .name = "glass", .tex_id = texpos(1, 3), .flags = .{ .transparent = true } },
-    .{ .name = "oreLapis", .tex_id = texpos(0, 10) },
-    .{},
-    .{},
-    .{ .name = "sandStone", .tex_id = texpos(0, 12), .top_tex_id = texpos(0, 11), .bottom_tex_id = texpos(0, 13), .flags = .{ .model = .full_barrel } },
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{ .name = "tallgrass", .tex_id = texpos(7, 2), .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    // 32
-    .{ .name = "deadbush", .tex_id = texpos(7, 3), .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{},
-    .{},
-    .{},
-    .{},
-    .{ .name = "flower", .tex_id = 13, .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{ .name = "rose", .tex_id = 12, .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{ .name = "mushroom", .tex_id = texpos(13, 1), .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{ .name = "mushroom", .tex_id = texpos(12, 1), .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{},
-    .{},
-    .{},
-    .{ .name = "step", .tex_id = 5, .top_tex_id = 6, .bottom_tex_id = 6, .flags = .{ .model = .slab } },
-    .{},
-    .{},
-    .{},
-    // 48
-    .{ .name = "stoneMoss", .tex_id = texpos(4, 2) },
-    .{ .name = "obsidian", .tex_id = texpos(5, 2) },
-    .{},
-    .{},
-    .{ .name = "mobSpawner", .tex_id = texpos(1, 4), .flags = .{ .transparent = true } },
-    .{},
-    .{},
-    .{},
-    .{ .name = "oreDiamond", .tex_id = texpos(2, 3) },
-    .{},
-    .{ .name = "workbench", .tex_id = texpos(12, 3), .east_tex_id = texpos(11, 3), .south_tex_id = texpos(11, 3), .west_tex_id = texpos(12, 3), .top_tex_id = texpos(11, 2), .bottom_tex_id = 4, .flags = .{ .model = .full_advanced } },
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 64
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{ .name = "oreRedstone", .tex_id = texpos(3, 3) },
-    .{ .name = "oreRedstone", .tex_id = texpos(3, 3) },
-    .{},
-    .{},
-    .{},
-    .{ .name = "snow", .tex_id = texpos(2, 4), .flags = .{ .model = .snow_layer, .hitbox = false } },
-    .{},
-    // 80
-    .{ .name = "snow", .tex_id = texpos(2, 4) },
-    .{ .name = "cactus", .tex_id = texpos(6, 4), .top_tex_id = texpos(5, 4), .bottom_tex_id = texpos(7, 4), .flags = .{ .model = .cactus, .transparent = true } },
-    .{ .name = "clay", .tex_id = texpos(8, 4) },
-    .{ .name = "reeds", .tex_id = texpos(9, 4), .flags = .{ .model = .plant, .transparent = true, .hitbox = false } },
-    .{},
-    .{},
-    .{ .name = "pumpkin", .tex_id = texpos(7, 7), .east_tex_id = texpos(6, 7), .south_tex_id = texpos(6, 7), .west_tex_id = texpos(6, 7), .top_tex_id = texpos(6, 6), .bottom_tex_id = texpos(6, 6), .flags = .{ .model = .full_advanced } },
-    .{},
-    .{},
-    .{},
-    .{},
-    .{ .name = "litpumpkin", .tex_id = texpos(8, 7), .east_tex_id = texpos(6, 7), .south_tex_id = texpos(6, 7), .west_tex_id = texpos(6, 7), .top_tex_id = texpos(6, 6), .bottom_tex_id = texpos(6, 6), .flags = .{ .model = .full_advanced } },
-    .{},
-    .{},
-    .{},
-    .{},
-    // 96
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 112
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 128
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 144
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 160
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 176
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 192
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 208
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 224
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 240
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    .{},
-    // 256
-};
-
-test "block tests" {
-    try std.testing.expect(table[@intFromEnum(blocks_enum.stone)].isFull());
-    try std.testing.expect(!table[@intFromEnum(blocks_enum.air)].isFull());
-    try std.testing.expect(!table[@intFromEnum(blocks_enum.glass)].isFull());
-    try std.testing.expect(!table[@intFromEnum(blocks_enum.step)].isFull());
+test "blocks module" {
+    std.testing.refAllDecls(registry);
+    std.testing.refAllDecls(atlas);
 }

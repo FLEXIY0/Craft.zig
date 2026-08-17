@@ -10,7 +10,8 @@ This is a project of writing a fully compatible Minecraft beta 1.7.3 client. Thi
 
 ## Documentation
 
-See [the docs folder](docs/).
+See [the docs folder](docs/), and [the data oriented architecture](docs/dod_architecture.md)
+for how terrain, blocks and chunk meshing are laid out.
 
 ## Screenshots
 

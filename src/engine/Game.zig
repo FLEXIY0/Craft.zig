@@ -73,7 +73,7 @@ pub fn update(self: *Game, delta: f32) !void {
     });
     defer zone.end();
 
-    _ = try self.world.updateModel();
+    _ = try self.world.update();
 
     self.player.update(delta);
     _ = try self.doTicks();
