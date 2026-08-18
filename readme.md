@@ -4,6 +4,11 @@ Minecraft compatible client for beta 1.7.3 servers.
 
 This is a work in progress! Do not expect a functionnal client or good quality code.
 
+```
+zig build run -- --singleplayer   # a world the client generates itself
+zig build run --                  # join a server on localhost
+```
+
 ## Introduction
 
 This is a project of writing a fully compatible Minecraft beta 1.7.3 client. This is not a full minecraft clone as it doesn't contain the code necessary for singleplayer or a server, it only allows connecting to servers (although hosting a local server can be considered as singleplayer and maybe automatized to have a singleplayer mode).

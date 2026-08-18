@@ -33,7 +33,7 @@ game: ?*engine.Game = null,
 ressource_manager: RessourceManager,
 chunk_mat: *const rl.Material,
 compass: *const rl.Model,
-icons: *const rl.Texture,
+icons: ?*const rl.Texture,
 selected_block: ?coord.Block = null,
 window_size: rl.Vector2,
 heal_hurt: i16,
@@ -68,7 +68,7 @@ pub fn init(alloc: std.mem.Allocator) !GameWindow {
         .ressource_manager = res_mana,
         .chunk_mat = res_mana.materials.get("chunk").?,
         .compass = res_mana.models.get("compass.glb").?,
-        .icons = res_mana.textures.get("icons.png").?,
+        .icons = res_mana.textures.get("icons.png"),
         .window_size = .{ .x = @floatFromInt(rl.getScreenWidth()), .y = @floatFromInt(rl.getScreenHeight()) },
         .heal_hurt = 0,
     };
@@ -351,10 +351,12 @@ pub fn drawGui(self: GameWindow) void {
     // Crosshair
     rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
 
-    // Health bar
+    // Health bar, when the icons of a jar are around to draw it with
     if (!self.f3_enabled and !self.freecam) {
-        const status: HealthBarStatus = if (@mod(self.heal_hurt, 2) == 1) (if (self.heal_hurt > 0) .healing else .hurting) else .neutral;
-        drawHealthBar(game.player.health, self.icons, status);
+        if (self.icons) |icons| {
+            const status: HealthBarStatus = if (@mod(self.heal_hurt, 2) == 1) (if (self.heal_hurt > 0) .healing else .hurting) else .neutral;
+            drawHealthBar(game.player.health, icons, status);
+        }
         if (self.heal_hurt < 0)
             rl.drawRectangle(0, 0, 10000, 10000, .init(200, 50, 50, 127));
     }

@@ -19,8 +19,12 @@ pub const lighting_adjustment = 2;
 const light_divider = 15 + lighting_adjustment;
 
 // TODO: based on biome
-const grass_color: [4]u8 = .{ 0x44, 0xbb, 0x44, 0xff };
-const foliage_color: [4]u8 = .{ 0x44, 0x99, 0x44, 0xff };
+//
+// These are multiplied with the texture, so a dark tint darkens the block.
+// The classic look keeps grass and foliage bright: the tint only pushes the
+// hue, it does not dim what the texture pack drew.
+const grass_color: [4]u8 = .{ 0xc6, 0xff, 0x8f, 0xff };
+const foliage_color: [4]u8 = .{ 0xb4, 0xf7, 0x7d, 0xff };
 const default_color: [4]u8 = .{ 0xff, 0xff, 0xff, 0xff };
 
 /// Untinted, unlit color of a block face
@@ -60,8 +64,12 @@ test "light darkens colors" {
 test "tints come from the registry" {
     const full = LightLevel{ .blocklight = 15, .skylight = 15 };
 
-    // Grass is only tinted on top
+    // Grass is only tinted on top, and the tint keeps it bright
     try std.testing.expectEqual(grass_color, faceColor(blocks.idOf(.grass), .up, full));
+    for (grass_color[0..3]) |channel|
+        try std.testing.expect(channel > 0x80);
+    for (foliage_color[0..3]) |channel|
+        try std.testing.expect(channel > 0x70);
     try std.testing.expectEqual(default_color, faceColor(blocks.idOf(.grass), .north, full));
     // Leaves are tinted everywhere
     try std.testing.expectEqual(foliage_color, faceColor(blocks.idOf(.leaves), .north, full));

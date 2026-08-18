@@ -53,6 +53,15 @@ behind. It writes into the chunk store exactly where the network path writes,
 so the meshing pipeline never learns whether the chunks came from a server or
 from the generator.
 
+## Textures
+
+The client ships with the single tile textures of Minecraft Classic in
+`res/textures/classic`, and packs them into the terrain atlas at startup, so
+that it draws something out of the box. Unpack a jar into `res/jar` and it uses
+`res/jar/minecraft/terrain.png` instead, which covers every block. The mapping
+from tile file to atlas position lives in
+`src/frontend/raylib/TerrainAtlas.zig`.
+
 ## Known gaps
 
 - light does not cross chunk borders yet, so a chunk is lit as if it stood

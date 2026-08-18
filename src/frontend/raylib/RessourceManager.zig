@@ -3,6 +3,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const blocks = @import("blocks");
+const TerrainAtlas = @import("TerrainAtlas.zig");
 
 const RessourceManager = @This();
 
@@ -31,8 +32,9 @@ pub fn init(alloc: std.mem.Allocator) !RessourceManager {
 /// Loads all raylib ressources
 pub fn loadAll(self: *RessourceManager) !void {
     // Textures
-    try self.loadTexture("res/jar/minecraft/terrain.png");
-    try self.loadTexture("res/jar/minecraft/gui/icons.png");
+    try self.loadTerrain();
+    // Only comes from a jar, and the client runs fine without a health bar
+    self.loadOptionalTexture("res/jar/minecraft/gui/icons.png");
 
     // Models
     try self.loadModel("res/kenney/character-a.glb");
@@ -91,6 +93,27 @@ pub fn unloadAll(self: *RessourceManager) void {
         //mat.value_ptr.*.unload();
         self.alloc.destroy(mat.value_ptr.*);
     }
+}
+
+/// Loads the terrain atlas: the one from an unpacked jar if there is one, or
+/// the tiles that ship with the client, packed on the spot
+fn loadTerrain(self: *RessourceManager) !void {
+    var new_tex = try self.alloc.create(rl.Texture);
+    errdefer self.alloc.destroy(new_tex);
+
+    new_tex.* = try TerrainAtlas.load(self.alloc);
+    errdefer new_tex.unload();
+
+    rl.setTextureFilter(new_tex.*, .point);
+
+    try self.textures.put("terrain.png", new_tex);
+}
+
+/// Loads a texture that the client can do without
+fn loadOptionalTexture(self: *RessourceManager, path: [:0]const u8) void {
+    self.loadTexture(path) catch |err| {
+        std.log.warn("No {s} ({}), carrying on without it", .{ path, err });
+    };
 }
 
 /// Loads a texture using its path

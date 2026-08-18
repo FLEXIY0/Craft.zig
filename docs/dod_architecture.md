@@ -67,6 +67,11 @@ the same declarations, and point the build at it:
 zig build -Datlas=zig-out/generated_atlas.zig
 ```
 
+The client also ships a set of single tile textures and packs them into that
+layout at startup when no atlas image is around
+(`src/frontend/raylib/TerrainAtlas.zig`), which is the "assemble the atlas from
+loose files" case of the same idea.
+
 The engine picks up the new layout with no other change, because:
 
 - the mesher only ever reads `atlas.origins[…]`
