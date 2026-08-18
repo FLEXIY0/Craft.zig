@@ -193,6 +193,18 @@ part of the pipeline that has to run on the thread that owns the GL context.
 The renderer walks the dense slot list and culls chunks against the camera
 frustum (`src/frontend/raylib/Frustum.zig`) before drawing.
 
+## Where the chunks come from
+
+Chunks are filled in by one of two systems, and neither one is visible to
+anything downstream:
+
+- the network path (`World.doChunkMap`), when a server sends them
+- the generator (`src/worldgen`, driven by `engine.Singleplayer`), when the
+  client plays a world of its own. See [world generation](worldgen.md).
+
+Both write into the same store arrays and both end with `commitChunkData`,
+which refreshes the derived data and queues the chunk for meshing.
+
 ## Build options
 
 | option | meaning |

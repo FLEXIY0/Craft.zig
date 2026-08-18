@@ -20,6 +20,10 @@
 - [ ] Per section meshes instead of per chunk meshes
 - [ ] Prioritize the remesh queue by distance to the player
 - [ ] Generate the texture atlas at build time (-Datlas=)
+- [ ] Light propagation across chunk borders (single player worlds show seams)
+- [ ] Swimming, so that the spawn point does not have to avoid water
+- [ ] Carved tunnel caves instead of noise blobs
+- [ ] Run world generation on the meshing worker threads
 - [ ] Move shaders and raylib-specific ressources to raylib module
 
 ## Raylib I/O

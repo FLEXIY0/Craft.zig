@@ -102,6 +102,9 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         self.wiremesh = !self.wiremesh;
     }
 
+    if (rl.isKeyPressed(.f2))
+        self.takeScreenshot();
+
     if (rl.isKeyPressed(.tab) and self.focused) {
         self.freecam = !self.freecam;
     }
@@ -198,6 +201,17 @@ pub fn update(self: *GameWindow, delta: f32) !void {
     }
 }
 
+/// Saves the last drawn frame next to the executable, like the game does
+pub fn takeScreenshot(self: *GameWindow) void {
+    var buf: [64]u8 = undefined;
+    const name = std.fmt.bufPrintZ(&buf, "craft_{}.png", .{std.time.milliTimestamp()}) catch return;
+
+    rl.takeScreenshot(name);
+    std.log.info("Screenshot saved as {s}", .{name});
+
+    _ = self;
+}
+
 pub fn tick(self: *GameWindow) void {
     if (self.heal_hurt > 0) {
         self.heal_hurt -= 1;
@@ -216,9 +230,12 @@ pub fn exitGame(self: *GameWindow) void {
     self.game = null;
 }
 
+/// Colour of the sky, until there is a proper day and night cycle
+const sky_color: rl.Color = .init(126, 176, 232, 255);
+
 pub fn beginDraw(_: GameWindow) void {
     rl.beginDrawing();
-    defer rl.clearBackground(.white);
+    defer rl.clearBackground(sky_color);
 }
 
 pub fn drawWorld(self: GameWindow) void {

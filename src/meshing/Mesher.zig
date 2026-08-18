@@ -346,10 +346,44 @@ test "blocks with their own model take the per block path" {
         defer result.deinit();
 
         try testing.expectEqual(@as(usize, 1), result.transparent.len);
-        // One surface quad, plus the six faces of the block below (water does
-        // not occlude water)
-        try testing.expectEqual(@as(u32, 7), quadCount(result));
+        // One surface quad, plus five faces of the block below: the face the
+        // two of them share is hidden, the way liquids do
+        try testing.expectEqual(@as(u32, 6), quadCount(result));
     }
+}
+
+test "liquids hide the faces they share" {
+    const alloc = testing.allocator;
+
+    const snapshot = try testSnapshot(alloc);
+    defer alloc.destroy(snapshot);
+
+    // A three by three by three cube of water: only the shell is drawn, and
+    // the block in the middle disappears entirely
+    for (4..7) |x| {
+        for (4..7) |y| {
+            for (4..7) |z|
+                setBlock(snapshot, x, y, z, 8);
+        }
+    }
+
+    const result = try mesh(alloc, snapshot);
+    defer result.deinit();
+
+    // Six faces of nine blocks each, merged into six quads
+    try testing.expectEqual(@as(u32, 6), quadCount(result));
+
+    // Glass is transparent too, but it is not a liquid: it keeps its faces
+    const glass = try testSnapshot(alloc);
+    defer alloc.destroy(glass);
+
+    setBlock(glass, 4, 40, 9, blocks.idOf(.glass));
+    setBlock(glass, 5, 40, 9, blocks.idOf(.glass));
+
+    const glass_result = try mesh(alloc, glass);
+    defer glass_result.deinit();
+
+    try testing.expectEqual(@as(u32, 8), quadCount(glass_result));
 }
 
 test "a slab under a solid block loses its top face only when covered" {

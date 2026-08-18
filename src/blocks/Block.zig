@@ -90,7 +90,7 @@ pub const Tint = enum(u2) {
 };
 
 /// Packed bitfield for model related flags (for compaction)
-pub const Flags = packed struct(u8) {
+pub const Flags = packed struct(u16) {
     /// Model and UV used
     model: Model = .full_basic,
     /// Texture has transparent parts (should be rendered on a different layer)
@@ -99,6 +99,11 @@ pub const Flags = packed struct(u8) {
     hitbox: bool = true, // Later: enum
     /// Vertex tint of the block
     tint: Tint = .none,
+    /// Hides the faces it shares with a block of its own kind, the way liquids
+    /// do: an ocean is a shell, not thousands of quads nobody ever sees
+    hides_self: bool = false,
+    /// Room for the flags to come
+    _reserved: u7 = 0,
 
     /// Returns true if the block is a full opaque block, i.e. a block that hides
     /// the faces of its neighbors
@@ -109,8 +114,8 @@ pub const Flags = packed struct(u8) {
 
 // TODO: direction-based opacity: example: slab occults face below but not others
 
-test "flags fit in a byte" {
-    try std.testing.expectEqual(1, @sizeOf(Flags));
+test "flags stay compact" {
+    try std.testing.expectEqual(2, @sizeOf(Flags));
     try std.testing.expect((Flags{ .model = .full_basic }).isOpaqueCube());
     try std.testing.expect(!(Flags{ .model = .full_basic, .transparent = true }).isOpaqueCube());
     try std.testing.expect(!(Flags{ .model = .slab }).isOpaqueCube());

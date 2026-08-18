@@ -314,6 +314,37 @@ pub fn doPreChunk(self: *World, coords: coord.Chunk, add: bool) !void {
     }
 }
 
+/// Loads an empty chunk, for a world that is filled in locally instead of
+/// being sent by a server. Write into the store's arrays, then call
+/// `commitChunkData`.
+pub fn loadChunk(self: *World, coords: coord.Chunk) !Slot {
+    const slot = try self.store.load(coords);
+    self.markNeighborsDirty(coords, .{ .north = true, .east = true, .south = true, .west = true });
+    return slot;
+}
+
+/// Unloads a chunk and queues its neighbors, whose faces towards it change
+pub fn unloadChunk(self: *World, coords: coord.Chunk) void {
+    self.store.unload(coords);
+    self.markNeighborsDirty(coords, .{ .north = true, .east = true, .south = true, .west = true });
+}
+
+/// Call after writing block data straight into the store: refreshes what the
+/// store derives from the blocks and queues the chunk (and its neighbors) for
+/// meshing
+pub fn commitChunkData(self: *World, slot: Slot) void {
+    self.store.recountSections(slot);
+    self.store.touch(slot);
+
+    self.markDirty(slot);
+    self.markNeighborsDirty(self.store.coords.get(slot), .{
+        .north = true,
+        .east = true,
+        .south = true,
+        .west = true,
+    });
+}
+
 /// Take block data and apply it to chunks
 pub fn doChunkMap(self: *World, x: i32, y: i16, z: i32, size_x: u8, size_y: u8, size_z: u8, data: []const u8) !void {
     // Tracking data left to read

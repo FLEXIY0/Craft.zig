@@ -58,6 +58,7 @@ const baked = blk: {
         hitbox: Set = 0,
         special_model: Set = 0,
         tinted: Set = 0,
+        hides_self: Set = 0,
     } = .{};
 
     // Undefined ids keep the default `Block` behaviour: they render as a full
@@ -91,6 +92,7 @@ const baked = blk: {
         b.hitbox &= ~bit;
         b.special_model &= ~bit;
         b.tinted &= ~bit;
+        b.hides_self &= ~bit;
 
         const def_flags = def.block.flags;
         if (def_flags.model.isInvisible())
@@ -107,6 +109,8 @@ const baked = blk: {
             b.special_model |= bit;
         if (def_flags.tint != .none)
             b.tinted |= bit;
+        if (def_flags.hides_self)
+            b.hides_self |= bit;
     }
 
     break :blk b;
@@ -140,6 +144,8 @@ pub const set = struct {
     pub const special_model: Set = baked.special_model;
     /// Ids whose vertices are tinted
     pub const tinted: Set = baked.tinted;
+    /// Ids that hide the faces they share with their own kind (liquids)
+    pub const hides_self: Set = baked.hides_self;
 };
 
 /// Name of a block, empty for undefined blocks
@@ -195,6 +201,11 @@ pub inline fn hasHitbox(block_id: Id) bool {
 /// True if the block needs the slow per-block mesher
 pub inline fn hasSpecialModel(block_id: Id) bool {
     return isIn(set.special_model, block_id);
+}
+
+/// True if the block hides the faces it shares with its own kind
+pub inline fn hidesSelf(block_id: Id) bool {
+    return isIn(set.hides_self, block_id);
 }
 
 /// Generate the blocks enum at compile time, from the block names

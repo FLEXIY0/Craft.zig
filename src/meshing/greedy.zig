@@ -47,8 +47,12 @@ pub const Scratch = struct {
     full: [chunk.width][chunk.width]Column = @splat(@splat(0)),
     /// Blocks that hide their neighbors' faces, per column
     occluders: [chunk.width][chunk.width]Column = @splat(@splat(0)),
+    /// Blocks that hide the faces they share with their own kind, per column
+    self_hiding: [chunk.width][chunk.width]Column = @splat(@splat(0)),
     /// Occluders of the neighbor chunks, indexed `[face][u]`
     edge_occluders: [Snapshot.side_count][chunk.width]Column = @splat(@splat(0)),
+    /// Self hiding blocks of the neighbor chunks, same indexing
+    edge_self_hiding: [Snapshot.side_count][chunk.width]Column = @splat(@splat(0)),
     /// Visible faces of the direction being processed, per column
     visible: [chunk.width][chunk.width]Column = @splat(@splat(0)),
     /// Block ids of every column of the chunk, so that the plane sweeps never
@@ -104,12 +108,20 @@ fn scan(scratch: *Scratch, alloc: std.mem.Allocator) !void {
 
             var full: Column = 0;
             var occluders: Column = 0;
+            var self_hiding: Column = 0;
 
             for (column, 0..) |block_id, y| {
                 if (blocks.isInvisible(block_id))
                     continue;
 
                 const bit = @as(Column, 1) << @intCast(y);
+
+                // Liquids hide the faces they share with their own kind, which
+                // is what turns an ocean from a solid block of quads into a
+                // surface with walls
+                if (blocks.hidesSelf(block_id))
+                    self_hiding |= bit;
+
                 if (blocks.isFullCube(block_id)) {
                     full |= bit;
                     if (blocks.isOpaqueCube(block_id))
@@ -121,35 +133,61 @@ fn scan(scratch: *Scratch, alloc: std.mem.Allocator) !void {
 
             scratch.full[x][z] = full;
             scratch.occluders[x][z] = occluders;
+            scratch.self_hiding[x][z] = self_hiding;
         }
     }
 }
 
 /// Same thing for the border planes of the neighbor chunks
 fn scanEdges(scratch: *Scratch, snapshot: *const Snapshot) void {
-    for (&scratch.edge_occluders, 0..) |*side, face| {
-        for (side, 0..) |*column, u| {
+    for (0..Snapshot.side_count) |face| {
+        for (0..chunk.width) |u| {
             var occluders: Column = 0;
+            var self_hiding: Column = 0;
+
             for (snapshot.edge_ids[face][u], 0..) |block_id, y| {
+                const bit = @as(Column, 1) << @intCast(y);
                 if (blocks.isOpaqueCube(block_id))
-                    occluders |= @as(Column, 1) << @intCast(y);
+                    occluders |= bit;
+                if (blocks.hidesSelf(block_id))
+                    self_hiding |= bit;
             }
-            column.* = occluders;
+
+            scratch.edge_occluders[face][u] = occluders;
+            scratch.edge_self_hiding[face][u] = self_hiding;
         }
     }
 }
 
 /// Occluders of a column, which may belong to a neighbor chunk
 inline fn occludersAt(scratch: *const Scratch, x: i32, z: i32) Column {
+    return columnAt(scratch, &scratch.occluders, &scratch.edge_occluders, x, z);
+}
+
+/// Self hiding blocks of a column, which may belong to a neighbor chunk
+inline fn selfHidingAt(scratch: *const Scratch, x: i32, z: i32) Column {
+    return columnAt(scratch, &scratch.self_hiding, &scratch.edge_self_hiding, x, z);
+}
+
+/// Looks a column mask up, inside the chunk or on one of the border planes
+inline fn columnAt(
+    scratch: *const Scratch,
+    inside: *const [chunk.width][chunk.width]Column,
+    edges: *const [Snapshot.side_count][chunk.width]Column,
+    x: i32,
+    z: i32,
+) Column {
+    _ = scratch;
+
     if (x < 0)
-        return scratch.edge_occluders[@intFromEnum(coord.Face.west)][@intCast(z)];
+        return edges[@intFromEnum(coord.Face.west)][@intCast(z)];
     if (x >= chunk.width)
-        return scratch.edge_occluders[@intFromEnum(coord.Face.east)][@intCast(z)];
+        return edges[@intFromEnum(coord.Face.east)][@intCast(z)];
     if (z < 0)
-        return scratch.edge_occluders[@intFromEnum(coord.Face.north)][@intCast(x)];
+        return edges[@intFromEnum(coord.Face.north)][@intCast(x)];
     if (z >= chunk.width)
-        return scratch.edge_occluders[@intFromEnum(coord.Face.south)][@intCast(x)];
-    return scratch.occluders[@intCast(x)][@intCast(z)];
+        return edges[@intFromEnum(coord.Face.south)][@intCast(x)];
+    return inside[@intCast(x)][@intCast(z)];
 }
 
 /// Bit mask of the visible faces of a column, for one face direction
@@ -158,7 +196,8 @@ inline fn visibleFaces(scratch: *const Scratch, comptime face: coord.Face, x: us
     const ix: i32 = @intCast(x);
     const iz: i32 = @intCast(z);
 
-    return full & ~switch (face) {
+    // What the neighbor in that direction hides
+    const occluders = switch (face) {
         .up => scratch.occluders[x][z] >> 1,
         .down => scratch.occluders[x][z] << 1,
         .north => occludersAt(scratch, ix, iz - 1),
@@ -166,6 +205,18 @@ inline fn visibleFaces(scratch: *const Scratch, comptime face: coord.Face, x: us
         .south => occludersAt(scratch, ix, iz + 1),
         .west => occludersAt(scratch, ix - 1, iz),
     };
+
+    // Water against water, lava against lava: both sides of that face go
+    const neighbor_kind = switch (face) {
+        .up => scratch.self_hiding[x][z] >> 1,
+        .down => scratch.self_hiding[x][z] << 1,
+        .north => selfHidingAt(scratch, ix, iz - 1),
+        .east => selfHidingAt(scratch, ix + 1, iz),
+        .south => selfHidingAt(scratch, ix, iz + 1),
+        .west => selfHidingAt(scratch, ix - 1, iz),
+    };
+
+    return full & ~occluders & ~(scratch.self_hiding[x][z] & neighbor_kind);
 }
 
 /// Points every column of the scratch at its data in the snapshot.
