@@ -92,6 +92,21 @@ pub fn containsChunk(self: Frustum, coords: coord.Chunk) bool {
     );
 }
 
+/// True if any part of one 16 block section of a chunk is visible.
+/// A chunk is 128 blocks tall, so testing it whole keeps most of the underground
+/// in the frame no matter where the camera looks: the section is the box that is
+/// actually worth culling.
+pub fn containsSection(self: Frustum, coords: coord.Chunk, section: usize) bool {
+    const x: f32 = @floatFromInt(coords.x * chunk.width);
+    const z: f32 = @floatFromInt(coords.z * chunk.width);
+    const y: f32 = @floatFromInt(section * chunk.section_height);
+
+    return self.containsBox(
+        .{ x, y, z },
+        .{ x + chunk.width, y + chunk.section_height, z + chunk.width },
+    );
+}
+
 test "chunks behind the camera are culled" {
     const camera: rl.Camera = .{
         // Standing in the middle of chunk 0,0, looking towards +x

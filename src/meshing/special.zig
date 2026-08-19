@@ -68,6 +68,10 @@ pub fn run(snapshot: *const Snapshot, indices: []const u16, layers: *Layers) !vo
         const light = snapshot.lightAt(x, y, z);
         const occlusion: Occlusion = .around(snapshot, x, y, z);
 
+        // Every model here fits inside its own block, so the whole block's
+        // geometry belongs to the section that block is in
+        layers.setSectionOfHeight(y);
+
         const origin: [3]f32 = .{
             @floatFromInt(x),
             @floatFromInt(y),

@@ -9,9 +9,18 @@
 //! A chunk mesh is split in several `Part`s: the vertex index type is usually 16
 //! bits, so a part is capped at 65532 vertices and a new one is started when it
 //! fills up.
+//!
+//! It is also split in *sections* of 16 blocks along y, so that the renderer can
+//! drop the parts of a chunk it can prove are not visible. That matters a lot
+//! here: a chunk is 128 blocks tall, the surface sits around y 64, and the caves
+//! below it hold most of the geometry while being visible from almost nowhere.
 
 const std = @import("std");
 const io = @import("io");
+const terrain = @import("terrain");
+const visibility = @import("visibility.zig");
+
+const chunk = terrain.chunk;
 
 const MeshData = @This();
 
@@ -47,31 +56,98 @@ pub const Part = struct {
     }
 };
 
+/// The geometry of one 16 block tall slice of the chunk
+pub const Section = struct {
+    /// Geometry of the opaque render layer
+    solid: []Part = &.{},
+    /// Geometry of the transparent render layer
+    transparent: []Part = &.{},
+
+    /// The parts of one render layer
+    pub inline fn layer(self: Section, which: Layer) []Part {
+        return switch (which) {
+            .solid => self.solid,
+            .transparent => self.transparent,
+        };
+    }
+
+    pub fn deinit(self: Section, alloc: std.mem.Allocator) void {
+        for (self.solid) |part|
+            part.deinit(alloc);
+        for (self.transparent) |part|
+            part.deinit(alloc);
+        alloc.free(self.solid);
+        alloc.free(self.transparent);
+    }
+};
+
+/// Which of the two render layers a part belongs to
+pub const Layer = @import("Layers.zig").Layer;
+
 /// Allocator the parts were allocated with
 alloc: std.mem.Allocator,
-/// Geometry of the opaque render layer
-solid: []Part = &.{},
-/// Geometry of the transparent render layer
-transparent: []Part = &.{},
+/// Geometry, one entry per 16 block section of the chunk, bottom first
+sections: [chunk.section_count]Section = @splat(.{}),
+/// Which faces of each section can see each other, for the renderer's traversal
+connectivity: [chunk.section_count]visibility.Connectivity = @splat(.{}),
 
 /// Frees everything the mesh owns
 pub fn deinit(self: MeshData) void {
-    for (self.solid) |part|
-        part.deinit(self.alloc);
-    for (self.transparent) |part|
-        part.deinit(self.alloc);
-    self.alloc.free(self.solid);
-    self.alloc.free(self.transparent);
+    for (self.sections) |section|
+        section.deinit(self.alloc);
 }
 
 /// Amount of vertices of the whole mesh, for statistics and tests
 pub fn vertexCount(self: MeshData) u32 {
     var total: u32 = 0;
-    for (self.solid) |part|
-        total += part.vertex_count;
-    for (self.transparent) |part|
-        total += part.vertex_count;
+    for (self.sections) |section| {
+        for (section.solid) |part|
+            total += part.vertex_count;
+        for (section.transparent) |part|
+            total += part.vertex_count;
+    }
     return total;
+}
+
+/// Amount of parts of one render layer, across every section
+pub fn partCount(self: MeshData, which: Layer) usize {
+    var total: usize = 0;
+    for (self.sections) |section|
+        total += section.layer(which).len;
+    return total;
+}
+
+/// Walks every part of one render layer, in section order
+pub fn parts(self: *const MeshData, which: Layer) PartIterator {
+    return .{ .mesh = self, .which = which };
+}
+
+pub const PartIterator = struct {
+    mesh: *const MeshData,
+    which: Layer,
+    section: usize = 0,
+    index: usize = 0,
+
+    pub fn next(self: *PartIterator) ?Part {
+        while (self.section < chunk.section_count) {
+            const list = self.mesh.sections[self.section].layer(self.which);
+            if (self.index < list.len) {
+                defer self.index += 1;
+                return list[self.index];
+            }
+            self.section += 1;
+            self.index = 0;
+        }
+        return null;
+    }
+};
+
+/// The single part of a render layer, for the tests that build a mesh small
+/// enough to be sure there is exactly one
+pub fn onlyPart(self: *const MeshData, which: Layer) Part {
+    std.debug.assert(self.partCount(which) == 1);
+    var it = self.parts(which);
+    return it.next().?;
 }
 
 /// Accumulates quads into vertex buffers, splitting them into parts when the
@@ -184,17 +260,19 @@ test "builder splits parts" {
         );
     }
 
-    const parts = try builder.toOwnedParts();
-    const mesh: MeshData = .{ .alloc = alloc, .solid = parts };
+    const built = try builder.toOwnedParts();
+    var mesh: MeshData = .{ .alloc = alloc };
+    mesh.sections[0].solid = built;
     defer mesh.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), parts.len);
-    try std.testing.expectEqual(max_vertices, parts[0].vertex_count);
-    try std.testing.expectEqual(@as(u32, 8), parts[1].vertex_count);
+    try std.testing.expectEqual(@as(usize, 2), built.len);
+    try std.testing.expectEqual(max_vertices, built[0].vertex_count);
+    try std.testing.expectEqual(@as(u32, 8), built[1].vertex_count);
     try std.testing.expectEqual(quads * 4, mesh.vertexCount());
+    try std.testing.expectEqual(@as(usize, 2), mesh.partCount(.solid));
 
     // Every index must stay addressable by the frontend's index type
-    for (parts) |part| {
+    for (built) |part| {
         try std.testing.expectEqual(part.vertex_count * 3, @as(u32, @intCast(part.positions.len)));
         try std.testing.expectEqual(part.triangle_count * 3, @as(u32, @intCast(part.indices.len)));
         for (part.indices) |index|

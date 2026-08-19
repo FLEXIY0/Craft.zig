@@ -7,7 +7,12 @@ This is a work in progress! Do not expect a functionnal client or good quality c
 ```
 zig build run -- --singleplayer   # a world the client generates itself
 zig build run --                  # join a server on localhost
+
+zig build run -- -s --fps=0 --stats   # uncapped, and log where the frame goes
 ```
+
+The frame rate is drawn in the corner, and F3 breaks the frame down into what
+the engine costs and what the graphics driver costs.
 
 ## Introduction
 

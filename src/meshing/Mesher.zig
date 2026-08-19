@@ -13,6 +13,7 @@ const Snapshot = @import("Snapshot.zig");
 const Layers = @import("Layers.zig");
 const greedy = @import("greedy.zig");
 const special = @import("special.zig");
+const visibility = @import("visibility.zig");
 
 const Mesher = @This();
 
@@ -23,21 +24,29 @@ mesh_alloc: std.mem.Allocator,
 alloc: std.mem.Allocator,
 /// Scratch space, big enough that it lives on the heap
 scratch: *greedy.Scratch,
+/// Scratch space of the section connectivity pass
+visibility_scratch: *visibility.Scratch,
 
 pub fn init(alloc: std.mem.Allocator, mesh_alloc: std.mem.Allocator) !Mesher {
     const scratch = try alloc.create(greedy.Scratch);
+    errdefer alloc.destroy(scratch);
     scratch.* = .{};
+
+    const visibility_scratch = try alloc.create(visibility.Scratch);
+    visibility_scratch.* = .{};
 
     return .{
         .alloc = alloc,
         .mesh_alloc = mesh_alloc,
         .scratch = scratch,
+        .visibility_scratch = visibility_scratch,
     };
 }
 
 pub fn deinit(self: *Mesher) void {
     self.scratch.deinit(self.alloc);
     self.alloc.destroy(self.scratch);
+    self.alloc.destroy(self.visibility_scratch);
 }
 
 /// Meshes a chunk. The caller owns the returned mesh.
@@ -55,7 +64,9 @@ pub fn run(self: *Mesher, snapshot: *const Snapshot) !MeshData {
     try greedy.run(self.scratch, self.alloc, snapshot, &layers);
     try special.run(snapshot, self.scratch.special.items, &layers);
 
-    return try layers.finish(self.mesh_alloc);
+    var result = try layers.finish(self.mesh_alloc);
+    result.connectivity = visibility.run(self.visibility_scratch, snapshot);
+    return result;
 }
 
 // --- Tests -----------------------------------------------------------------
@@ -104,8 +115,8 @@ test "an empty chunk produces no geometry" {
     defer result.deinit();
 
     try testing.expectEqual(@as(u32, 0), result.vertexCount());
-    try testing.expectEqual(@as(usize, 0), result.solid.len);
-    try testing.expectEqual(@as(usize, 0), result.transparent.len);
+    try testing.expectEqual(@as(usize, 0), result.partCount(.solid));
+    try testing.expectEqual(@as(usize, 0), result.partCount(.transparent));
 }
 
 test "a lone block is a cube" {
@@ -120,11 +131,11 @@ test "a lone block is a cube" {
     defer result.deinit();
 
     try testing.expectEqual(@as(u32, 6), quadCount(result));
-    try testing.expectEqual(@as(usize, 1), result.solid.len);
+    try testing.expectEqual(@as(usize, 1), result.partCount(.solid));
 
     // Every vertex is on the surface of that one block, and every uv stays
     // inside a single tile
-    const part = result.solid[0];
+    const part = result.onlyPart(.solid);
     var i: usize = 0;
     while (i < part.vertex_count) : (i += 1) {
         const x = part.positions[i * 3 + 0];
@@ -157,7 +168,7 @@ test "neighboring blocks merge and hide each other" {
 
     // The top quad spans two blocks along x, so its uv goes from 0 to 2
     var widest: f32 = 0;
-    for (result.solid[0].uvs) |uv|
+    for (result.onlyPart(.solid).uvs) |uv|
         widest = @max(widest, uv);
     try testing.expectEqual(@as(f32, 2.0), widest);
 }
@@ -191,8 +202,47 @@ test "a full chunk only keeps its shell" {
     const result = try mesh(alloc, snapshot);
     defer result.deinit();
 
-    // Top, bottom and four sides, one quad each: 32768 blocks in 24 vertices
-    try testing.expectEqual(@as(u32, 6), quadCount(result));
+    // 32768 blocks come out as a shell: one quad for the top, one for the
+    // bottom, and one per side per section, because a quad may not span two
+    // sections. That is the price of being able to drop a section on its own,
+    // and it is a good trade: four extra quads per section buys the renderer the
+    // right to skip everything below the surface.
+    try testing.expectEqual(@as(u32, 2 + 4 * chunk.section_count), quadCount(result));
+
+    // Every section of a solid chunk carries its own four walls
+    for (result.sections, 0..) |section, index| {
+        const walls = section.solid[0].vertex_count / 4;
+        try testing.expect(walls >= 4);
+        _ = index;
+    }
+}
+
+test "a quad never spans two sections" {
+    const alloc = testing.allocator;
+
+    const snapshot = try testSnapshot(alloc);
+    defer alloc.destroy(snapshot);
+
+    // A pillar tall enough to cross several section borders
+    for (0..chunk.height) |y|
+        setBlock(snapshot, 4, y, 9, blocks.idOf(.stone));
+
+    const result = try mesh(alloc, snapshot);
+    defer result.deinit();
+
+    // Each section only ever holds geometry of its own 16 blocks
+    for (result.sections, 0..) |section, index| {
+        const low: f32 = @floatFromInt(index * chunk.section_height);
+        const high = low + chunk.section_height;
+
+        for (section.solid) |part| {
+            var i: usize = 0;
+            while (i < part.vertex_count) : (i += 1) {
+                const y = part.positions[i * 3 + 1];
+                try testing.expect(y >= low and y <= high);
+            }
+        }
+    }
 }
 
 test "loaded neighbors hide the faces at the chunk border" {
@@ -210,8 +260,8 @@ test "loaded neighbors hide the faces at the chunk border" {
     const result = try mesh(alloc, snapshot);
     defer result.deinit();
 
-    // The west wall is not drawn any more
-    try testing.expectEqual(@as(u32, 5), quadCount(result));
+    // The west wall is not drawn any more: one wall per section is gone
+    try testing.expectEqual(@as(u32, 2 + 3 * chunk.section_count), quadCount(result));
 }
 
 test "different blocks and different light do not merge" {
@@ -262,15 +312,15 @@ test "transparent blocks go to their own layer" {
     const result = try mesh(alloc, snapshot);
     defer result.deinit();
 
-    try testing.expectEqual(@as(usize, 1), result.solid.len);
-    try testing.expectEqual(@as(usize, 1), result.transparent.len);
+    try testing.expectEqual(@as(usize, 1), result.partCount(.solid));
+    try testing.expectEqual(@as(usize, 1), result.partCount(.transparent));
 
     // Stone: 6 quads
-    try testing.expectEqual(@as(u32, 6 * 4), result.solid[0].vertex_count);
+    try testing.expectEqual(@as(u32, 6 * 4), result.onlyPart(.solid).vertex_count);
     // Glass does not hide glass, so the two faces that touch are still drawn,
     // one from each side. The six outer faces merge across the two blocks, so
     // that makes 6 + 2 quads.
-    try testing.expectEqual(@as(u32, 8 * 4), result.transparent[0].vertex_count);
+    try testing.expectEqual(@as(u32, 8 * 4), result.onlyPart(.transparent).vertex_count);
 }
 
 test "an opaque neighbor still hides a transparent block's face" {
@@ -287,8 +337,8 @@ test "an opaque neighbor still hides a transparent block's face" {
 
     // Glass loses the face towards the stone, the stone loses the one towards
     // the glass only if the glass occluded, which it does not
-    try testing.expectEqual(@as(u32, 5 * 4), result.transparent[0].vertex_count);
-    try testing.expectEqual(@as(u32, 6 * 4), result.solid[0].vertex_count);
+    try testing.expectEqual(@as(u32, 5 * 4), result.onlyPart(.transparent).vertex_count);
+    try testing.expectEqual(@as(u32, 6 * 4), result.onlyPart(.solid).vertex_count);
 }
 
 test "blocks with their own model take the per block path" {
@@ -306,7 +356,7 @@ test "blocks with their own model take the per block path" {
 
         try testing.expectEqual(@as(u32, 6), quadCount(result));
 
-        const part = result.solid[0];
+        const part = result.onlyPart(.solid);
         var highest: f32 = 0;
         var i: usize = 0;
         while (i < part.vertex_count) : (i += 1)
@@ -326,9 +376,9 @@ test "blocks with their own model take the per block path" {
 
         try testing.expectEqual(@as(u32, 4), quadCount(result));
         // Tall grass is tinted, and it is transparent
-        try testing.expectEqual(@as(usize, 1), result.transparent.len);
-        try testing.expectEqual(@as(usize, 0), result.solid.len);
-        try testing.expect(result.transparent[0].colors[0] != 0xff);
+        try testing.expectEqual(@as(usize, 1), result.partCount(.transparent));
+        try testing.expectEqual(@as(usize, 0), result.partCount(.solid));
+        try testing.expect(result.onlyPart(.transparent).colors[0] != 0xff);
     }
 
     {
@@ -345,7 +395,7 @@ test "blocks with their own model take the per block path" {
         const result = try mesh(alloc, snapshot);
         defer result.deinit();
 
-        try testing.expectEqual(@as(usize, 1), result.transparent.len);
+        try testing.expectEqual(@as(usize, 1), result.partCount(.transparent));
         // One surface quad, plus five faces of the block below: the face the
         // two of them share is hidden, the way liquids do
         try testing.expectEqual(@as(u32, 6), quadCount(result));
@@ -425,9 +475,10 @@ test "every emitted index stays inside its part" {
     const result = try mesh(alloc, snapshot);
     defer result.deinit();
 
-    try testing.expect(result.solid.len > 1);
+    try testing.expect(result.partCount(.solid) > 1);
 
-    for (result.solid) |part| {
+    var it = result.parts(.solid);
+    while (it.next()) |part| {
         try testing.expectEqual(part.vertex_count * 3, @as(u32, @intCast(part.positions.len)));
         try testing.expectEqual(part.vertex_count * 2, @as(u32, @intCast(part.uvs.len)));
         try testing.expectEqual(part.vertex_count * 2, @as(u32, @intCast(part.tiles.len)));

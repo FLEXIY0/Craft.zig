@@ -102,8 +102,13 @@ pub const Flags = packed struct(u16) {
     /// Hides the faces it shares with a block of its own kind, the way liquids
     /// do: an ocean is a shell, not thousands of quads nobody ever sees
     hides_self: bool = false,
+    /// Stops the renderer's visibility walk even though its faces are still
+    /// drawn. Water is the case this exists for: a face touching it is real
+    /// geometry, but sight does not carry through sixty blocks of sea, so
+    /// whatever lies behind that much of it is not worth walking to
+    stops_sight: bool = false,
     /// Room for the flags to come
-    _reserved: u7 = 0,
+    _reserved: u6 = 0,
 
     /// Returns true if the block is a full opaque block, i.e. a block that hides
     /// the faces of its neighbors

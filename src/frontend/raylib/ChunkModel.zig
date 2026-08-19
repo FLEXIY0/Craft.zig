@@ -7,15 +7,32 @@
 const std = @import("std");
 const rl = @import("raylib");
 const coord = @import("coord");
+const terrain = @import("terrain");
 const meshing = @import("meshing");
 const tracy = @import("tracy");
 
+const chunk = terrain.chunk;
+
 const ChunkModel = @This();
 
-/// Opaque geometry
-meshes: []rl.Mesh,
-/// Geometry drawn on the transparent layer
-transparent_meshes: []rl.Mesh,
+/// The uploaded geometry of one 16 block section of the chunk
+pub const Section = struct {
+    /// Opaque geometry
+    meshes: []rl.Mesh = &.{},
+    /// Geometry drawn on the transparent layer
+    transparent_meshes: []rl.Mesh = &.{},
+
+    /// True when the section has nothing to draw at all, which is the common
+    /// case: most sections of most chunks are solid rock or plain air
+    pub inline fn isEmpty(self: Section) bool {
+        return self.meshes.len == 0 and self.transparent_meshes.len == 0;
+    }
+};
+
+/// Geometry, one entry per section of the chunk, bottom first
+sections: [chunk.section_count]Section,
+/// Which faces of each section can see each other, for the visibility walk
+connectivity: [chunk.section_count]meshing.visibility.Connectivity = @splat(.{}),
 
 /// Uploads a finished chunk mesh to the gpu.
 /// Takes ownership of `data`, whatever happens.
@@ -27,43 +44,67 @@ pub fn upload(alloc: std.mem.Allocator, data: meshing.MeshData) !ChunkModel {
     });
     defer zone.end();
 
-    const meshes = alloc.alloc(rl.Mesh, data.solid.len) catch |err| {
-        data.deinit();
-        return err;
+    var model: ChunkModel = .{
+        .sections = @splat(.{}),
+        .connectivity = data.connectivity,
     };
-    errdefer alloc.free(meshes);
 
-    const transparent_meshes = alloc.alloc(rl.Mesh, data.transparent.len) catch |err| {
-        alloc.free(meshes);
-        data.deinit();
-        return err;
-    };
+    // Every allocation happens before a single buffer changes hands, so that a
+    // failure here leaves the mesh entirely owned by `data` and freeing it once
+    // is correct
+    for (data.sections, &model.sections) |source, *section| {
+        section.meshes = allocMeshes(alloc, source.solid.len) catch |err| {
+            freeMeshArrays(alloc, &model);
+            data.deinit();
+            return err;
+        };
+        section.transparent_meshes = allocMeshes(alloc, source.transparent.len) catch |err| {
+            freeMeshArrays(alloc, &model);
+            data.deinit();
+            return err;
+        };
+    }
 
     // Talking to the driver needs a window, which a headless run (tests, or a
     // client that has not opened its window yet) does not have. The mesh is
     // still built and owned, it just stays on the cpu side.
     const can_upload = rl.isWindowReady();
 
-    // From here on the vertex buffers belong to the meshes
-    for (data.solid, meshes) |part, *mesh| {
-        mesh.* = meshFromPart(part);
-        if (can_upload)
-            rl.uploadMesh(mesh, false);
-    }
-    for (data.transparent, transparent_meshes) |part, *mesh| {
-        mesh.* = meshFromPart(part);
-        if (can_upload)
-            rl.uploadMesh(mesh, false);
+    // From here on the vertex buffers belong to the meshes, and nothing fails
+    for (data.sections, &model.sections) |source, *section| {
+        for (source.solid, section.meshes) |part, *mesh| {
+            mesh.* = meshFromPart(part);
+            if (can_upload)
+                rl.uploadMesh(mesh, false);
+        }
+        for (source.transparent, section.transparent_meshes) |part, *mesh| {
+            mesh.* = meshFromPart(part);
+            if (can_upload)
+                rl.uploadMesh(mesh, false);
+        }
+
+        // Only the (now empty) part arrays are left to free
+        data.alloc.free(source.solid);
+        data.alloc.free(source.transparent);
     }
 
-    // Only the (now empty) part arrays are left to free
-    data.alloc.free(data.solid);
-    data.alloc.free(data.transparent);
+    return model;
+}
 
-    return .{
-        .meshes = meshes,
-        .transparent_meshes = transparent_meshes,
-    };
+/// Allocates the mesh array of one layer of one section
+fn allocMeshes(alloc: std.mem.Allocator, count: usize) ![]rl.Mesh {
+    if (count == 0)
+        return &.{};
+    return alloc.alloc(rl.Mesh, count);
+}
+
+/// Frees the mesh arrays of a model that does not own any vertex buffer yet
+fn freeMeshArrays(alloc: std.mem.Allocator, model: *ChunkModel) void {
+    for (&model.sections) |*section| {
+        alloc.free(section.meshes);
+        alloc.free(section.transparent_meshes);
+        section.* = .{};
+    }
 }
 
 /// Wraps the buffers of a mesh part in a raylib mesh, without copying them
@@ -92,41 +133,61 @@ fn meshFromPart(part: meshing.Part) rl.Mesh {
     };
 }
 
-pub fn draw(self: ChunkModel, pos: coord.Chunk, material: *const rl.Material) void {
-    const transform: rl.Matrix = .translate(
-        @floatFromInt(pos.x * 16),
+/// Transform of the chunk, shared by all of its sections: the geometry carries
+/// its real height, so a section needs no offset of its own
+inline fn transformOf(pos: coord.Chunk) rl.Matrix {
+    return .translate(
+        @floatFromInt(pos.x * chunk.width),
         0,
-        @floatFromInt(pos.z * 16),
+        @floatFromInt(pos.z * chunk.width),
     );
-    for (self.meshes) |mesh|
+}
+
+/// Draws the opaque geometry of one section
+pub fn drawSection(self: ChunkModel, section: usize, pos: coord.Chunk, material: *const rl.Material) void {
+    const transform = transformOf(pos);
+    for (self.sections[section].meshes) |mesh|
         rl.drawMesh(mesh, material.*, transform);
 }
 
-pub fn drawTransparentLayer(self: ChunkModel, pos: coord.Chunk, material: *const rl.Material) void {
-    const transform: rl.Matrix = .translate(
-        @floatFromInt(pos.x * 16),
-        0,
-        @floatFromInt(pos.z * 16),
-    );
-    for (self.transparent_meshes) |mesh|
+/// Draws the transparent geometry of one section
+pub fn drawSectionTransparent(self: ChunkModel, section: usize, pos: coord.Chunk, material: *const rl.Material) void {
+    const transform = transformOf(pos);
+    for (self.sections[section].transparent_meshes) |mesh|
         rl.drawMesh(mesh, material.*, transform);
 }
 
-/// Amount of triangles the model draws, for the debug overlay
-pub fn triangleCount(self: ChunkModel) usize {
+/// Amount of draw calls one section costs, for the debug overlay. Every mesh
+/// part is a full material bind, so this is the number that has to stay small
+pub fn sectionDrawCallCount(self: ChunkModel, section: usize) usize {
+    return self.sections[section].meshes.len + self.sections[section].transparent_meshes.len;
+}
+
+/// Amount of triangles one section draws, for the debug overlay
+pub fn sectionTriangleCount(self: ChunkModel, section: usize) usize {
     var total: usize = 0;
-    for (self.meshes) |mesh|
+    for (self.sections[section].meshes) |mesh|
         total += @intCast(mesh.triangleCount);
-    for (self.transparent_meshes) |mesh|
+    for (self.sections[section].transparent_meshes) |mesh|
         total += @intCast(mesh.triangleCount);
     return total;
 }
 
+/// Amount of triangles of the whole chunk
+pub fn triangleCount(self: ChunkModel) usize {
+    var total: usize = 0;
+    for (0..chunk.section_count) |section|
+        total += self.sectionTriangleCount(section);
+    return total;
+}
+
 pub fn deinit(self: ChunkModel, alloc: std.mem.Allocator) void {
-    for (self.meshes) |mesh|
-        mesh.unload();
-    for (self.transparent_meshes) |mesh|
-        mesh.unload();
-    alloc.free(self.meshes);
-    alloc.free(self.transparent_meshes);
+    for (self.sections) |section| {
+        for (section.meshes) |mesh|
+            mesh.unload();
+        for (section.transparent_meshes) |mesh|
+            mesh.unload();
+        alloc.free(section.meshes);
+        alloc.free(section.transparent_meshes);
+    }
 }

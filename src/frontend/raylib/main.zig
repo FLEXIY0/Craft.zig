@@ -16,15 +16,23 @@ const Options = struct {
     /// Server to join
     address: []const u8 = "localhost",
     port: u16 = 25565,
+    /// Frame rate cap, zero to run uncapped
+    fps: u32 = 60,
+    /// Log where the frame goes once a second
+    stats: bool = false,
 };
 
-/// Parses `--singleplayer`, `--seed=N`, `--server=host[:port]`
+/// Parses `--singleplayer`, `--seed=N`, `--server=host[:port]`, `--fps=N`
 fn parseOptions(args: []const [:0]const u8) Options {
     var options: Options = .{ .seed = @bitCast(std.time.milliTimestamp()) };
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--singleplayer") or std.mem.eql(u8, arg, "-s")) {
             options.singleplayer = true;
+        } else if (std.mem.eql(u8, arg, "--stats")) {
+            options.stats = true;
+        } else if (std.mem.startsWith(u8, arg, "--fps=")) {
+            options.fps = std.fmt.parseInt(u32, arg["--fps=".len..], 10) catch options.fps;
         } else if (std.mem.startsWith(u8, arg, "--seed=")) {
             options.seed = std.fmt.parseInt(u64, arg["--seed=".len..], 10) catch options.seed;
             options.singleplayer = true;
@@ -50,7 +58,7 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     defer std.process.argsFree(alloc, args);
     const options = parseOptions(args[@min(1, args.len)..]);
 
-    var window: GameWindow = try .init(alloc);
+    var window: GameWindow = try .init(alloc, options.fps);
     defer window.deinit();
 
     var client: engine.Client = undefined;
@@ -75,15 +83,23 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     window.enterGame(&client.game);
     defer window.exitGame();
 
+    // Splitting the frame in "what the engine does" and "what the driver does"
+    // is the only way to tell an engine that is too slow from a frame that is
+    // simply waiting on the gpu or on the frame rate cap
+    var timer: std.time.Timer = try .start();
+    var report: std.time.Timer = try .start();
+
     // TODO: make menus
     while (!window.hasClosed()) {
         const dt = rl.getFrameTime();
 
+        timer.reset();
         if (!try client.update(dt))
             break;
 
         // TODO: who should call that?
         try window.update(dt);
+        window.stats.addUpdate(timer.lap());
         {
             const zone = tracy.Zone.begin(.{
                 .name = "Game draw",
@@ -95,6 +111,14 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
             window.drawWorld();
             window.drawGui();
         }
+        window.stats.addSubmit(timer.lap());
+
         window.endDraw();
+        window.stats.addPresent(timer.lap());
+
+        if (options.stats and report.read() > std.time.ns_per_s) {
+            report.reset();
+            window.stats.log();
+        }
     }
 }

@@ -59,6 +59,7 @@ const baked = blk: {
         special_model: Set = 0,
         tinted: Set = 0,
         hides_self: Set = 0,
+        stops_sight: Set = 0,
     } = .{};
 
     // Undefined ids keep the default `Block` behaviour: they render as a full
@@ -93,6 +94,7 @@ const baked = blk: {
         b.special_model &= ~bit;
         b.tinted &= ~bit;
         b.hides_self &= ~bit;
+        b.stops_sight &= ~bit;
 
         const def_flags = def.block.flags;
         if (def_flags.model.isInvisible())
@@ -111,6 +113,8 @@ const baked = blk: {
             b.tinted |= bit;
         if (def_flags.hides_self)
             b.hides_self |= bit;
+        if (def_flags.stops_sight)
+            b.stops_sight |= bit;
     }
 
     break :blk b;
@@ -146,6 +150,11 @@ pub const set = struct {
     pub const tinted: Set = baked.tinted;
     /// Ids that hide the faces they share with their own kind (liquids)
     pub const hides_self: Set = baked.hides_self;
+    /// Ids sight does not carry through, even though their faces are drawn
+    pub const stops_sight: Set = baked.stops_sight;
+    /// Everything the renderer's visibility walk may not pass through: solid
+    /// rock, and enough water or lava to lose sight of what is behind it
+    pub const blocks_sight: Set = baked.opaque_cube | baked.stops_sight;
 };
 
 /// Name of a block, empty for undefined blocks
@@ -206,6 +215,13 @@ pub inline fn hasSpecialModel(block_id: Id) bool {
 /// True if the block hides the faces it shares with its own kind
 pub inline fn hidesSelf(block_id: Id) bool {
     return isIn(set.hides_self, block_id);
+}
+
+/// True if the renderer's visibility walk may not pass through the block.
+/// Wider than `isOpaqueCube`: a face touching water is still drawn, but nothing
+/// far behind a body of water is worth walking to.
+pub inline fn blocksSight(block_id: Id) bool {
+    return isIn(set.blocks_sight, block_id);
 }
 
 /// Generate the blocks enum at compile time, from the block names

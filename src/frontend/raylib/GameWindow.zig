@@ -11,6 +11,8 @@ const RessourceManager = @import("RessourceManager.zig");
 const vec = @import("vec.zig");
 const ChunkModel = @import("ChunkModel.zig");
 const Frustum = @import("Frustum.zig");
+const FrameStats = @import("FrameStats.zig");
+const VisibleSet = @import("VisibleSet.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -37,14 +39,20 @@ icons: ?*const rl.Texture,
 selected_block: ?coord.Block = null,
 window_size: rl.Vector2,
 heal_hurt: i16,
+/// Where the frame goes, for the debug overlay
+stats: FrameStats = .{},
+/// Sections the camera can see, rebuilt every frame
+visible: VisibleSet,
 
-pub fn init(alloc: std.mem.Allocator) !GameWindow {
+/// `target_fps` of zero runs the loop uncapped, which is what a frame time
+/// measurement needs: a capped frame only ever measures the cap
+pub fn init(alloc: std.mem.Allocator, target_fps: u32) !GameWindow {
     rl.setConfigFlags(.{ .window_resizable = true, .window_highdpi = true });
     rl.initWindow(screenWidth, screenHeight, "Maincraft by Guigui220D");
     errdefer rl.closeWindow();
 
     rl.disableCursor();
-    rl.setTargetFPS(60);
+    rl.setTargetFPS(@intCast(target_fps));
     rl.setExitKey(.f1);
 
     rl.setTraceLogLevel(.warning);
@@ -66,6 +74,7 @@ pub fn init(alloc: std.mem.Allocator) !GameWindow {
         .cam_rot = .zero(),
         .cam_rel_pos = .zero(),
         .ressource_manager = res_mana,
+        .visible = .init(alloc),
         .chunk_mat = res_mana.materials.get("chunk").?,
         .compass = res_mana.models.get("compass.glb").?,
         .icons = res_mana.textures.get("icons.png"),
@@ -185,7 +194,9 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         const pos_in_chunk = pos_block.getPosInChunk();
         const time = game.time.load(.unordered);
         const block_id = if (self.selected_block) |selected| game.world.getBlockId(selected) else 0;
-        self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}", .{
+        self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}\n" ++
+            "chunks: {} drawn / {} loaded, {} sections\ntriangles: {}, draw calls: {}\n" ++
+            "engine: {d:.2} ms (update {d:.2} + submit {d:.2})\npresent: {d:.2} ms", .{
             cam_pos,
             pos,
             pos_block,
@@ -197,6 +208,15 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             block_id,
             blocks.nameOf(block_id),
             game.player.health,
+            self.stats.chunks_drawn,
+            self.stats.chunks_loaded,
+            self.stats.sections_drawn,
+            self.stats.triangles,
+            self.stats.draw_calls,
+            self.stats.cpuTime(),
+            self.stats.update,
+            self.stats.submit,
+            self.stats.present,
         });
     }
 }
@@ -238,7 +258,7 @@ pub fn beginDraw(_: GameWindow) void {
     defer rl.clearBackground(sky_color);
 }
 
-pub fn drawWorld(self: GameWindow) void {
+pub fn drawWorld(self: *GameWindow) void {
     if (self.game == null)
         return;
 
@@ -255,34 +275,47 @@ pub fn drawWorld(self: GameWindow) void {
     const store = &game.world.store;
     const frustum: Frustum = .fromCamera(self.camera, self.window_size.x / self.window_size.y);
 
-    var drawn: u32 = 0;
-    for (store.live.items) |slot| {
-        const chunk_pos = store.coords.get(slot);
+    // Walk the world from the camera outwards instead of drawing every loaded
+    // chunk: sealed rock stops the walk, and the caves behind it are never
+    // reached. That is where most of a chunk's geometry lives.
+    self.visible.gather(store, frustum, self.camera.position) catch |err| {
+        std.log.err("Could not walk the visible sections ({}), drawing everything", .{err});
+    };
 
-        if (!frustum.containsChunk(chunk_pos))
-            continue;
+    var chunks_drawn: u32 = 0;
+    var last_chunk: ?coord.Chunk = null;
+    var triangles: u32 = 0;
+    var draw_calls: u32 = 0;
 
-        if (self.f3_enabled) {
-            // Draw chunk bottom/bounds (debug)
-            rl.drawCubeWires(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 64, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, 16, 128, 16, .red);
-            rl.drawPlane(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 0, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, .{ .x = 16, .y = 16 }, .magenta);
+    for (self.visible.visible.items) |entry| {
+        if (last_chunk == null or !std.meta.eql(last_chunk.?, entry.coords)) {
+            last_chunk = entry.coords;
+            chunks_drawn += 1;
+
+            if (self.f3_enabled) {
+                // Draw chunk bottom/bounds (debug)
+                rl.drawCubeWires(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 64, .z = @floatFromInt(entry.coords.z * 16 + 8) }, 16, 128, 16, .red);
+                rl.drawPlane(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 0, .z = @floatFromInt(entry.coords.z * 16 + 8) }, .{ .x = 16, .y = 16 }, .magenta);
+            }
         }
 
-        // Draw the solid part of the chunk
-        if (store.model.get(slot)) |model| {
-            model.draw(chunk_pos, self.chunk_mat);
-            drawn += 1;
-        }
+        const model = store.model.get(entry.slot) orelse continue;
+        model.drawSection(entry.section, entry.coords, self.chunk_mat);
+        triangles += @intCast(model.sectionTriangleCount(entry.section));
+        draw_calls += @intCast(model.sectionDrawCallCount(entry.section));
     }
 
-    // Draw the transparent part of chunks
-    for (store.live.items) |slot| {
-        const chunk_pos = store.coords.get(slot);
-        if (!frustum.containsChunk(chunk_pos))
-            continue;
-        if (store.model.get(slot)) |model|
-            model.drawTransparentLayer(chunk_pos, self.chunk_mat);
+    // Draw the transparent part of the very same sections, after the opaque one
+    for (self.visible.visible.items) |entry| {
+        const model = store.model.get(entry.slot) orelse continue;
+        model.drawSectionTransparent(entry.section, entry.coords, self.chunk_mat);
     }
+
+    self.stats.chunks_drawn = chunks_drawn;
+    self.stats.sections_drawn = @intCast(self.visible.visible.items.len);
+    self.stats.chunks_loaded = @intCast(store.live.items.len);
+    self.stats.triangles = triangles;
+    self.stats.draw_calls = draw_calls;
 
     if (self.wiremesh)
         rl.gl.rlDisableWireMode();
@@ -425,6 +458,7 @@ fn drawHealthBar(health_level: u8, icons: *const rl.Texture, status: HealthBarSt
 }
 
 pub fn deinit(self: *GameWindow) void {
+    self.visible.deinit();
     rl.closeWindow();
     self.ressource_manager.unloadAll();
     self.ressource_manager.deinit();

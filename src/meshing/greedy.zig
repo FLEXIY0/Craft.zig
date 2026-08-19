@@ -314,7 +314,10 @@ fn meshFace(scratch: *Scratch, snapshot: *const Snapshot, layers: *Layers, compt
                     }
                 }
 
-                try mergePlane(keys, chunk.width, chunk.width, layers, face, y);
+                // A horizontal plane sits at a single height, so it belongs to
+                // one section whole: merging never has to stop early
+                layers.setSectionOfHeight(y);
+                try mergePlane(keys, chunk.width, chunk.width, chunk.width, layers, face, y);
             }
         },
         // Vertical planes along z: one per z, u is x and v is y
@@ -342,7 +345,7 @@ fn meshFace(scratch: *Scratch, snapshot: *const Snapshot, layers: *Layers, compt
                 }
 
                 if (any)
-                    try mergePlane(keys, chunk.width, chunk.height, layers, face, z);
+                    try mergePlane(keys, chunk.width, chunk.height, chunk.section_height, layers, face, z);
             }
         },
         // Vertical planes along x: one per x, u is z and v is y
@@ -369,7 +372,7 @@ fn meshFace(scratch: *Scratch, snapshot: *const Snapshot, layers: *Layers, compt
                 }
 
                 if (any)
-                    try mergePlane(keys, chunk.width, chunk.height, layers, face, x);
+                    try mergePlane(keys, chunk.width, chunk.height, chunk.section_height, layers, face, x);
             }
         },
     }
@@ -377,16 +380,26 @@ fn meshFace(scratch: *Scratch, snapshot: *const Snapshot, layers: *Layers, compt
 
 /// Merges the faces of a plane into maximal rectangles and emits them.
 /// `keys` is consumed: merged cells are cleared as the sweep goes.
+///
+/// `v_step` is the stride a rectangle may never grow across. On the vertical
+/// planes v is the height, and a quad has to stay inside one section so that the
+/// renderer can drop a section without losing half of a quad that reached into
+/// it. On the horizontal planes there is nothing to clamp, and `v_step` is the
+/// whole plane.
 fn mergePlane(
     keys: []Key,
     u_len: usize,
     v_len: usize,
+    v_step: usize,
     layers: *Layers,
     comptime face: coord.Face,
     slice: usize,
 ) !void {
     var v: usize = 0;
     while (v < v_len) : (v += 1) {
+        // Rectangles started on this row may not reach past the end of its slab
+        const v_end = @min(v_len, (v / v_step + 1) * v_step);
+
         var u: usize = 0;
         while (u < u_len) {
             const key = keys[v * u_len + u];
@@ -402,7 +415,7 @@ fn mergePlane(
 
             // Grow along v, one full row at a time
             var h: usize = 1;
-            grow: while (v + h < v_len) {
+            grow: while (v + h < v_end) {
                 const row = keys[(v + h) * u_len ..][0..u_len];
                 for (row[u..][0..w]) |candidate| {
                     if (candidate != key)
@@ -436,6 +449,14 @@ fn emitFace(
     const block_id = keyBlockId(key);
     const color = shading.faceColor(block_id, face, keyLight(key));
     const tile = blocks.atlas.origins[blocks.texOf(face, block_id)];
+
+    // On a vertical plane v is the height, and `mergePlane` kept the rectangle
+    // inside one section. The horizontal planes are at a single height, which
+    // the caller already announced.
+    switch (face) {
+        .up, .down => {},
+        else => layers.setSectionOfHeight(v),
+    }
 
     const fu: f32 = @floatFromInt(u);
     const fv: f32 = @floatFromInt(v);

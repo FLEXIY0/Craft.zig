@@ -46,6 +46,7 @@ pub const isTransparent = registry.isTransparent;
 pub const hasHitbox = registry.hasHitbox;
 pub const hasSpecialModel = registry.hasSpecialModel;
 pub const hidesSelf = registry.hidesSelf;
+pub const blocksSight = registry.blocksSight;
 
 test "blocks module" {
     std.testing.refAllDecls(registry);

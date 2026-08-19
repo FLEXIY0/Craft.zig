@@ -280,7 +280,7 @@ test "scheduler meshes chunks on worker threads" {
             defer result.mesh.deinit();
             received += 1;
             try std.testing.expectEqual(@as(u32, 6 * 4), result.mesh.vertexCount());
-            try std.testing.expectEqual(@as(usize, 0), result.mesh.transparent.len);
+            try std.testing.expectEqual(@as(usize, 0), result.mesh.partCount(.transparent));
         } else {
             std.Thread.yield() catch {};
         }

@@ -41,22 +41,22 @@ pub const list = [_]Def{
     .{ .id = 8, .block = .{
         .name = "water",
         .tex = .{ .all = t(15, 12) },
-        .flags = .{ .transparent = true, .hitbox = false, .hides_self = true },
+        .flags = .{ .transparent = true, .hitbox = false, .hides_self = true, .stops_sight = true },
     } },
     .{ .id = 9, .block = .{
         .name = "water",
         .tex = .{ .all = t(15, 12) },
-        .flags = .{ .model = .liquid_still, .transparent = true, .hitbox = false, .hides_self = true },
+        .flags = .{ .model = .liquid_still, .transparent = true, .hitbox = false, .hides_self = true, .stops_sight = true },
     } },
     .{ .id = 10, .block = .{
         .name = "lava",
         .tex = .{ .all = t(15, 14) },
-        .flags = .{ .hitbox = false, .hides_self = true },
+        .flags = .{ .hitbox = false, .hides_self = true, .stops_sight = true },
     } },
     .{ .id = 11, .block = .{
         .name = "lava",
         .tex = .{ .all = t(15, 14) },
-        .flags = .{ .model = .liquid_still, .hitbox = false, .hides_self = true },
+        .flags = .{ .model = .liquid_still, .hitbox = false, .hides_self = true, .stops_sight = true },
     } },
     .{ .id = 12, .block = .{ .name = "sand", .tex = .{ .all = t(2, 1) } } },
     .{ .id = 13, .block = .{ .name = "gravel", .tex = .{ .all = t(3, 1) } } },

@@ -22,6 +22,7 @@ pub const Layers = @import("Layers.zig");
 pub const shading = @import("shading.zig");
 pub const greedy = @import("greedy.zig");
 pub const special = @import("special.zig");
+pub const visibility = @import("visibility.zig");
 pub const queue = @import("queue.zig");
 
 pub const Part = MeshData.Part;

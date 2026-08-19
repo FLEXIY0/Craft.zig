@@ -12,6 +12,7 @@ the data.
 - [The texture atlas](#the-texture-atlas-one-swappable-file)
 - [The chunk store](#the-chunk-store-soa-and-slots)
 - [Greedy meshing](#greedy-meshing)
+- [Sections and the visibility walk](#sections-and-the-visibility-walk)
 - [The lock free meshing pipeline](#the-lock-free-meshing-pipeline)
 - [What the frontend receives](#what-the-frontend-receives)
 - [Build options](#build-options)
@@ -135,7 +136,8 @@ same way, so chunk boundaries need no special case.
 **2. Greedy merging.** For each face direction and each plane, visible faces are
 keyed by everything that must match for two faces to be drawn as one quad — the
 block id and the light level — and merged into maximal rectangles. A full stone
-chunk (32768 blocks) comes out as **six quads**.
+chunk (32768 blocks) comes out as **34 quads**: a top, a bottom, and four walls
+per section (see below for why the sections matter).
 
 Blocks whose model is not a full cube (slabs, plants, liquids, snow, cactus) are
 collected by the same scan into a small list and meshed one at a time in
@@ -153,6 +155,63 @@ vec4 texelColor = texture(texture0, fragTileOrigin + inTile);
 The same convention handles the odd models for free: a slab side is half a block
 tall, so its uvs go from 0 to 0.5 and it samples the top half of its tile, which
 is exactly what the old hand written uv tables did.
+
+## Sections and the visibility walk
+
+Meshing a chunk well is only half of the problem: the other half is not drawing
+the parts of it nobody can see. A chunk is 128 blocks tall and the surface sits
+around y 64, so most of a world's geometry is below the waterline. Measured on
+a real generated world (seed 4242, 81 chunks with their real neighbours), 87% of
+the triangles were under y 64, mostly the walls and floor of ocean basins.
+
+Frustum culling does not touch that. A frustum widens with distance, so a chunk
+a hundred blocks away is "visible" from its bedrock to its treetops.
+
+Two things fix it:
+
+**1. The mesh is cut into sections.** `Layers` keeps one pair of builders per
+16 block section and the greedy sweep is not allowed to merge a quad across a
+section border (`mergePlane`'s `v_step`). A solid chunk therefore comes out as
+34 quads instead of 6 — four walls per section instead of four walls — which is
+the price of being able to drop a section on its own.
+
+**2. The renderer walks the world instead of iterating it.**
+`meshing/visibility.zig` flood fills every section at meshing time and records
+which of its six faces end up in the same region, as `[6]u8` of face bits. The
+renderer (`frontend/raylib/VisibleSet.zig`) then starts at the section the camera
+is in and only steps into a neighbor when the section it is leaving really does
+connect the face it came in through to the face it is leaving by. It never steps
+back the way it came, and never enters a section twice. This is the same idea
+Minecraft has used since 1.8.
+
+What stops the walk is `blocks.blocksSight`, which is *wider* than
+`isOpaqueCube`:
+
+```zig
+pub const blocks_sight: Set = baked.opaque_cube | baked.stops_sight;
+```
+
+`stops_sight` is a block flag, set on water and lava. A face touching water is
+still meshed and still drawn — the shallows show their sandy bottom — but sight
+does not carry through sixty blocks of sea, which is exactly why the classic
+game's oceans read as a flat blue surface. Without that flag the walk floods the
+whole basin, because water is not an occluder and everything under it connects.
+
+A camera *inside* a sight blocking block (a swimming player) would seal its own
+starting section, so that case falls back to plain frustum culling.
+
+Measured in the client, same viewpoint, seed 4242:
+
+| | triangles | draw calls | frame |
+| --- | --- | --- | --- |
+| every loaded chunk, frustum culled | 313 500 | 178 | 38.6 ms |
+| sections, frustum culled | 262 100 | 652 | 38.3 ms |
+| sections, visibility walk | **112 838** | **258** | **18.8 ms** |
+
+The frame time is measured on a machine with no gpu at all (Mesa llvmpipe), so
+it is dominated by pixel work: what the walk really removes is the sea bed being
+shaded once and then covered by translucent water, which is why it more than
+doubles the frame rate there.
 
 ## The lock free meshing pipeline
 
@@ -226,8 +285,13 @@ with a malloc style allocator (as in the real client):
 | chunk | quads | time |
 | --- | --- | --- |
 | dense terrain, 600 cave holes, grass and plants | 4476 | 1.4 ms |
-| solid stone (32768 blocks) | 6 | 0.23 ms |
+| solid stone (32768 blocks) | 34 | 0.23 ms |
 | empty | 0 | 0.07 ms |
+
+The whole of what this engine does on the main thread — applying block changes,
+driving the meshing pipeline, generating the single player world — measures
+**0.02 ms per frame** (`--stats`). Everything else in a frame is the graphics
+driver.
 
 Those run on the worker threads, so they cost the frame nothing but the upload.
 
@@ -246,11 +310,13 @@ Roughly in order of "value for the work":
   in 3, the tile index in 8: a vertex could be one `u32` instead of 44 bytes,
   which is 10x less bandwidth to the gpu. Needs a vertex shader that unpacks, so
   it does not fit raylib's `Mesh` struct as is.
-- **Per section meshes** instead of per chunk, so that editing one block only
-  remeshes 16³ blocks, and so that vertical frustum culling has something to cull.
-- **Occlusion culling** of chunks that are behind other chunks, using the same
-  column bit masks (a chunk whose border planes are solid can hide what is
-  behind it).
+- **Per section remeshing**, so that editing one block only rebuilds 16³ blocks
+  instead of the whole chunk. The mesh is already cut into sections; the meshing
+  job is not.
+- **Fewer draw calls.** Every mesh part is a full material bind in raylib
+  (shader, uniforms, textures, vao). A chunk's sections could share one vertex
+  buffer and be drawn as index ranges behind a single bind, which would take the
+  frame from a few hundred binds to a few dozen.
 - **Job stealing / priority by distance.** The remesh queue is FIFO; sorting by
   distance to the player would make the world appear from the inside out.
 - **Async light propagation** as its own job type, so that a light update does

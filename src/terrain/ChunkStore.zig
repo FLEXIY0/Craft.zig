@@ -117,6 +117,12 @@ pub fn find(self: ChunkStore, coords: coord.Chunk) ?Slot {
     return self.map.get(coords);
 }
 
+/// One past the highest slot the store has ever handed out, i.e. the length a
+/// side table indexed by slot needs to have
+pub fn capacity(self: ChunkStore) usize {
+    return self.slot_count;
+}
+
 /// True if the slot currently holds the chunk at `coords`
 pub fn holds(self: ChunkStore, slot: Slot, coords: coord.Chunk) bool {
     if (slot >= self.slot_count or !self.loaded.get(slot))
