@@ -351,6 +351,9 @@ pub fn drawGui(self: GameWindow) void {
     // Crosshair
     rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
 
+    // Frame rate, top right corner
+    rl.drawFPS(@intFromFloat(self.window_size.x - 90), 10);
+
     // Health bar, when the icons of a jar are around to draw it with
     if (!self.f3_enabled and !self.freecam) {
         if (self.icons) |icons| {
