@@ -13,6 +13,7 @@ const ChunkModel = @import("ChunkModel.zig");
 const Frustum = @import("Frustum.zig");
 const FrameStats = @import("FrameStats.zig");
 const VisibleSet = @import("VisibleSet.zig");
+const ChunkBatch = @import("ChunkBatch.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -287,28 +288,46 @@ pub fn drawWorld(self: *GameWindow) void {
     var triangles: u32 = 0;
     var draw_calls: u32 = 0;
 
+    // The shader, the terrain texture and the camera matrices are the same for
+    // every chunk of the frame: the batch uploads them once instead of once per
+    // section, which is most of what a draw used to cost
+    var batch: ChunkBatch = .begin(self.chunk_mat);
+
     for (self.visible.visible.items) |entry| {
+        const model = store.model.get(entry.slot) orelse continue;
+
         if (last_chunk == null or !std.meta.eql(last_chunk.?, entry.coords)) {
             last_chunk = entry.coords;
             chunks_drawn += 1;
-
-            if (self.f3_enabled) {
-                // Draw chunk bottom/bounds (debug)
-                rl.drawCubeWires(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 64, .z = @floatFromInt(entry.coords.z * 16 + 8) }, 16, 128, 16, .red);
-                rl.drawPlane(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 0, .z = @floatFromInt(entry.coords.z * 16 + 8) }, .{ .x = 16, .y = 16 }, .magenta);
-            }
+            batch.beginChunk(entry.coords);
         }
 
-        const model = store.model.get(entry.slot) orelse continue;
-        model.drawSection(entry.section, entry.coords, self.chunk_mat);
+        batch.drawSection(model, entry.section);
         triangles += @intCast(model.sectionTriangleCount(entry.section));
         draw_calls += @intCast(model.sectionDrawCallCount(entry.section));
     }
 
     // Draw the transparent part of the very same sections, after the opaque one
+    last_chunk = null;
     for (self.visible.visible.items) |entry| {
         const model = store.model.get(entry.slot) orelse continue;
-        model.drawSectionTransparent(entry.section, entry.coords, self.chunk_mat);
+        if (model.sections[entry.section].transparent_meshes.len == 0)
+            continue;
+
+        if (last_chunk == null or !std.meta.eql(last_chunk.?, entry.coords)) {
+            last_chunk = entry.coords;
+            batch.beginChunk(entry.coords);
+        }
+        batch.drawSectionTransparent(model, entry.section);
+    }
+
+    batch.end();
+
+    if (self.f3_enabled) {
+        for (self.visible.visible.items) |entry| {
+            // Draw chunk bottom/bounds (debug)
+            rl.drawCubeWires(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 64, .z = @floatFromInt(entry.coords.z * 16 + 8) }, 16, 128, 16, .red);
+        }
     }
 
     self.stats.chunks_drawn = chunks_drawn;

@@ -20,15 +20,20 @@ const Options = struct {
     fps: u32 = 60,
     /// Log where the frame goes once a second
     stats: bool = false,
+    /// Chunks loaded around the player, zero to keep the default
+    view_distance: u32 = 0,
 };
 
-/// Parses `--singleplayer`, `--seed=N`, `--server=host[:port]`, `--fps=N`
+/// Parses `--singleplayer`, `--seed=N`, `--server=host[:port]`, `--fps=N`,
+/// `--view-distance=N` and `--stats`
 fn parseOptions(args: []const [:0]const u8) Options {
     var options: Options = .{ .seed = @bitCast(std.time.milliTimestamp()) };
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--singleplayer") or std.mem.eql(u8, arg, "-s")) {
             options.singleplayer = true;
+        } else if (std.mem.startsWith(u8, arg, "--view-distance=")) {
+            options.view_distance = std.fmt.parseInt(u32, arg["--view-distance=".len..], 10) catch options.view_distance;
         } else if (std.mem.eql(u8, arg, "--stats")) {
             options.stats = true;
         } else if (std.mem.startsWith(u8, arg, "--fps=")) {
@@ -66,6 +71,8 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     if (options.singleplayer) {
         std.log.info("Generating a world...", .{});
         try client.initLocal(alloc, &window, options.seed);
+        if (options.view_distance > 0)
+            client.singleplayer.?.view_distance = @intCast(options.view_distance);
     } else {
         std.log.info("Connecting...", .{});
         client.init(alloc, &window, options.address, options.port) catch |e| {
