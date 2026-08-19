@@ -35,6 +35,8 @@ pub fn loadAll(self: *RessourceManager) !void {
     try self.loadTerrain();
     // Only comes from a jar, and the client runs fine without a health bar
     self.loadOptionalTexture("res/jar/minecraft/gui/icons.png");
+    // The classic crosshair, drawn over the middle of the world
+    self.loadOptionalTexture("res/textures/classic/gui/crosshair.png");
 
     // Models
     try self.loadModel("res/kenney/character-a.glb");

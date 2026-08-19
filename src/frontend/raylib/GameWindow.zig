@@ -14,6 +14,7 @@ const Frustum = @import("Frustum.zig");
 const FrameStats = @import("FrameStats.zig");
 const VisibleSet = @import("VisibleSet.zig");
 const ChunkBatch = @import("ChunkBatch.zig");
+const Settings = @import("Settings.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -37,6 +38,7 @@ ressource_manager: RessourceManager,
 chunk_mat: *const rl.Material,
 compass: *const rl.Model,
 icons: ?*const rl.Texture,
+crosshair: ?*const rl.Texture,
 selected_block: ?coord.Block = null,
 window_size: rl.Vector2,
 heal_hurt: i16,
@@ -44,17 +46,21 @@ heal_hurt: i16,
 stats: FrameStats = .{},
 /// Sections the camera can see, rebuilt every frame
 visible: VisibleSet,
+/// What the player chose in the options screen
+settings: *const Settings,
 
-/// `target_fps` of zero runs the loop uncapped, which is what a frame time
-/// measurement needs: a capped frame only ever measures the cap
-pub fn init(alloc: std.mem.Allocator, target_fps: u32) !GameWindow {
+/// The options decide the frame cap, the field of view and the sensitivity, so
+/// the window needs them from the start. A cap of zero runs the loop uncapped,
+/// which is what a frame time measurement needs: a capped frame only ever
+/// measures the cap.
+pub fn init(alloc: std.mem.Allocator, settings: *const Settings) !GameWindow {
     rl.setConfigFlags(.{ .window_resizable = true, .window_highdpi = true });
     rl.initWindow(screenWidth, screenHeight, "Maincraft by Guigui220D");
     errdefer rl.closeWindow();
 
-    rl.disableCursor();
-    rl.setTargetFPS(@intCast(target_fps));
-    rl.setExitKey(.f1);
+    // The menu owns the pointer until a world is running
+    rl.setTargetFPS(@intCast(settings.fps_cap));
+    rl.setExitKey(.null);
 
     rl.setTraceLogLevel(.warning);
 
@@ -68,7 +74,7 @@ pub fn init(alloc: std.mem.Allocator, target_fps: u32) !GameWindow {
             .position = .init(0, 120, 0),
             .target = .init(10, 120, 0),
             .up = .init(0, 1, 0),
-            .fovy = 60,
+            .fovy = @floatFromInt(settings.fov),
             .projection = .perspective,
         },
         .cube_position = .init(0, 0, 0),
@@ -76,9 +82,11 @@ pub fn init(alloc: std.mem.Allocator, target_fps: u32) !GameWindow {
         .cam_rel_pos = .zero(),
         .ressource_manager = res_mana,
         .visible = .init(alloc),
+        .settings = settings,
         .chunk_mat = res_mana.materials.get("chunk").?,
         .compass = res_mana.models.get("compass.glb").?,
         .icons = res_mana.textures.get("icons.png"),
+        .crosshair = res_mana.textures.get("crosshair.png"),
         .window_size = .{ .x = @floatFromInt(rl.getScreenWidth()), .y = @floatFromInt(rl.getScreenHeight()) },
         .heal_hurt = 0,
     };
@@ -93,16 +101,6 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         return;
 
     const game = self.game.?;
-
-    if (rl.isMouseButtonPressed(.left)) {
-        rl.disableCursor();
-        self.focused = true;
-    }
-
-    if (rl.isKeyPressed(.escape) and self.focused) {
-        rl.enableCursor();
-        self.focused = false;
-    }
 
     if (rl.isKeyPressed(.f3) and self.focused) {
         self.f3_enabled = !self.f3_enabled;
@@ -129,7 +127,8 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         } else {
             // Look around code
             // Take mouse movement in account
-            self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * 10.0));
+            const sensitivity: f32 = @floatFromInt(self.settings.sensitivity);
+            self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * sensitivity));
             // Clamp vertical rotation
             if (self.cam_rot.y > 89.9)
                 self.cam_rot.y = 89.9;
@@ -179,6 +178,8 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             }
         }
     }
+
+    self.camera.fovy = @floatFromInt(self.settings.fov);
 
     // Update camera position
     if (!self.freecam) {
@@ -400,11 +401,35 @@ pub fn drawGui(self: GameWindow) void {
     if (self.f3_enabled)
         rl.drawText(self.f3_str, 10, 10, 20, .black);
 
-    // Crosshair
-    rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
+    // Crosshair: the classic one when it is around, a ring when it is not
+    if (self.crosshair) |crosshair| {
+        const size = 24;
+        const source: rl.Rectangle = .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(crosshair.width),
+            .height = @floatFromInt(crosshair.height),
+        };
+        rl.drawTexturePro(
+            crosshair.*,
+            source,
+            .{
+                .x = self.window_size.x / 2 - size / 2,
+                .y = self.window_size.y / 2 - size / 2,
+                .width = size,
+                .height = size,
+            },
+            .zero(),
+            0,
+            .white,
+        );
+    } else {
+        rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
+    }
 
     // Frame rate, top right corner
-    rl.drawFPS(@intFromFloat(self.window_size.x - 90), 10);
+    if (self.settings.show_fps)
+        rl.drawFPS(@intFromFloat(self.window_size.x - 90), 10);
 
     // Health bar, when the icons of a jar are around to draw it with
     if (!self.f3_enabled and !self.freecam) {

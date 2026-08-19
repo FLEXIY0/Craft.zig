@@ -5,11 +5,18 @@ Minecraft compatible client for beta 1.7.3 servers.
 This is a work in progress! Do not expect a functionnal client or good quality code.
 
 ```
-zig build run -- --singleplayer   # a world the client generates itself
-zig build run --                  # join a server on localhost
+zig build run                     # the title screen: create a world, or join one
+zig build run -- --singleplayer   # skip the menu, straight into a new world
+zig build run -- --server=host    # skip the menu, straight into a server
 
 zig build run -- -s --fps=0 --stats   # uncapped, and log where the frame goes
 ```
+
+The client opens on a menu: **Singleplayer** creates a world (name, seed, render
+distance), **Multiplayer** joins a server, and **Options** holds the render
+distance, field of view, sensitivity and frame cap. Escape brings the same menu
+up over a running world. Options are kept in `craft_options.txt` next to the
+executable.
 
 The frame rate is drawn in the corner, and F3 breaks the frame down into what
 the engine costs and what the graphics driver costs.
