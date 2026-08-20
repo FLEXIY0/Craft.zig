@@ -42,12 +42,29 @@ pub fn loadAll(self: *RessourceManager) !void {
     try self.loadModel("res/kenney/character-a.glb");
     try self.loadModel("res/compass.glb");
 
-    // Shaders
-    try self.loadShader("chunk", "res/shaders/chunk.vs", "res/shaders/chunk.fs");
+    // Shaders. Which pair is right is a question about the driver, not about
+    // the platform: a phone runs GLSL ES, and so does a desktop built against
+    // GL ES, so the version rlgl actually got is what decides.
+    if (isGlEs()) {
+        try self.loadShader("chunk", "res/shaders/chunk_es.vs", "res/shaders/chunk_es.fs");
+    } else {
+        try self.loadShader("chunk", "res/shaders/chunk.vs", "res/shaders/chunk.fs");
+    }
     self.setAtlasUniform("chunk");
 
     // Materials
     try self.makeMaterial("chunk", "terrain.png", "chunk");
+}
+
+/// True when rlgl is talking to an OpenGL ES driver, which needs the older
+/// spelling of GLSL
+fn isGlEs() bool {
+    return switch (rl.gl.rlGetVersion()) {
+        @intFromEnum(rl.gl.rlGlVersion.rl_opengl_es_20),
+        @intFromEnum(rl.gl.rlGlVersion.rl_opengl_es_30),
+        => true,
+        else => false,
+    };
 }
 
 /// Tells the chunk shader how the texture atlas is laid out, so that it can

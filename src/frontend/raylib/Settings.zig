@@ -3,9 +3,18 @@
 //! Stored as `key value` lines next to the executable. A hand written parser is
 //! the right size here: the file is a dozen numbers, an unknown key is skipped
 //! rather than being an error, and a missing file just means the defaults.
+//!
+//! The reading and the writing go through raylib rather than through std.fs,
+//! and that is not a matter of taste. On Android there is no working directory
+//! the app may write to, and the game's own files live inside the APK; raylib's
+//! file functions know about both, reading from the package first and falling
+//! back to the one directory the app owns, and writing only ever to that. On a
+//! desktop they are fopen and fwrite next to the executable, which is what this
+//! did before.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const rl = @import("raylib");
 
 const Settings = @This();
 
@@ -18,8 +27,9 @@ const touch_by_default = switch (builtin.target.abi) {
     else => false,
 };
 
-/// Name of the file, in the working directory the client was started from
-pub const path = "craft_options.txt";
+/// Name of the file: next to the executable on a desktop, in the app's own
+/// directory on a phone
+pub const path: [:0]const u8 = "craft_options.txt";
 
 /// Chunks loaded around the player
 view_distance: i32 = 8,
@@ -83,15 +93,13 @@ pub fn clampAll(self: *Settings) void {
 }
 
 /// Reads the options file, falling back to the defaults for anything missing
-pub fn load(alloc: std.mem.Allocator) Settings {
+pub fn load() Settings {
     var self: Settings = .{};
 
-    const text = std.fs.cwd().readFileAlloc(alloc, path, 64 * 1024) catch |err| {
-        if (err != error.FileNotFound)
-            std.log.warn("Could not read {s} ({}), using the defaults", .{ path, err });
-        return self;
-    };
-    defer alloc.free(text);
+    // Not having one is the normal case on a first run, and raylib has already
+    // said so in the log
+    const text = rl.loadFileData(path) catch return self;
+    defer rl.unloadFileData(text);
 
     self.parse(text);
     self.clampAll();
@@ -139,9 +147,8 @@ pub fn save(self: Settings) void {
         }
     }
 
-    std.fs.cwd().writeFile(.{ .sub_path = path, .data = stream.getWritten() }) catch |err| {
-        std.log.warn("Could not write {s} ({})", .{ path, err });
-    };
+    if (!rl.saveFileData(path, @constCast(stream.getWritten())))
+        std.log.warn("Could not write {s}", .{path});
 }
 
 // --- Tests -----------------------------------------------------------------

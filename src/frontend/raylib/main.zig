@@ -118,7 +118,7 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     defer std.process.argsFree(alloc, args);
     const options = parseOptions(args[@min(1, args.len)..]);
 
-    var settings: Settings = .load(alloc);
+    var settings: Settings = .load();
     if (options.fps) |fps| settings.fps_cap = @intCast(fps);
     if (options.view_distance) |distance| settings.view_distance = distance;
     settings.clampAll();

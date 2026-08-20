@@ -5,6 +5,89 @@ pub const Frontend = enum {
     raylib,
 };
 
+/// Writes out the paths zig needs to use the NDK's libc.
+///
+/// raylib builds one of these for itself, but with the pre 0.15 spelling: it
+/// hands the rendered bytes to one list and takes the slice from another, so
+/// the file it writes is empty and the build stops on a parse error. Ours is
+/// handed to raylib's artifact as well, which is the whole of the workaround.
+fn androidLibCFile(b: *std.Build, include: []const u8, crt: []const u8) std.Build.LazyPath {
+    var out: std.Io.Writer.Allocating = .init(b.allocator);
+    (std.zig.LibCInstallation{
+        .include_dir = include,
+        .sys_include_dir = include,
+        .crt_dir = crt,
+    }).render(&out.writer) catch @panic("could not describe the NDK's libc");
+
+    return b.addWriteFiles().add(
+        "android-libc.txt",
+        out.toOwnedSlice() catch @panic("out of memory"),
+    );
+}
+
+/// Points a compile step at the NDK: its libc, its headers, its crt and the
+/// libraries an app is expected to link. raylib does this for itself, but the
+/// app is a separate artifact and has to be told the same things.
+fn addAndroidSupport(
+    b: *std.Build,
+    compile: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    ndk: []const u8,
+    api: []const u8,
+) void {
+    if (ndk.len == 0)
+        std.debug.panic("An Android target needs -Dandroid-ndk=<path> or ANDROID_NDK_HOME", .{});
+
+    // The only host tags the NDK ships, per its own documentation
+    const host = switch (@import("builtin").target.os.tag) {
+        .linux => "linux-x86_64",
+        .windows => "windows-x86_64",
+        .macos => "darwin-x86_64",
+        else => @panic("unsupported host for an Android build"),
+    };
+
+    const triple = switch (target.result.cpu.arch) {
+        .x86 => "i686-linux-android",
+        .x86_64 => "x86_64-linux-android",
+        .arm => "arm-linux-androideabi",
+        .aarch64 => "aarch64-linux-android",
+        .riscv64 => "riscv64-linux-android",
+        else => @panic("no Android ABI for this architecture"),
+    };
+
+    const sysroot = b.pathJoin(&.{ ndk, "toolchains/llvm/prebuilt", host, "sysroot" });
+    const include = b.pathJoin(&.{ sysroot, "usr/include" });
+    const lib = b.pathJoin(&.{ sysroot, "usr/lib", triple });
+    const api_lib = b.pathJoin(&.{ lib, api });
+    const glue = b.pathJoin(&.{ ndk, "sources/android/native_app_glue" });
+
+    compile.root_module.addLibraryPath(.{ .cwd_relative = lib });
+    compile.root_module.addLibraryPath(.{ .cwd_relative = api_lib });
+    compile.root_module.addSystemIncludePath(.{ .cwd_relative = include });
+    compile.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ include, triple }) });
+    compile.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ include, "asm-generic" }) });
+    compile.root_module.addIncludePath(.{ .cwd_relative = glue });
+
+    compile.setLibCFile(androidLibCFile(b, include, api_lib));
+
+    compile.root_module.addCSourceFile(.{
+        .file = .{ .cwd_relative = b.pathJoin(&.{ glue, "android_native_app_glue.c" }) },
+        .flags = &.{"-std=c99"},
+    });
+
+    // NativeActivity looks up ANativeActivity_onCreate by name, so the glue's
+    // entry point must survive a linker that sees nothing referring to it
+    compile.root_module.linkSystemLibrary("log", .{});
+    compile.root_module.linkSystemLibrary("android", .{});
+    compile.root_module.linkSystemLibrary("EGL", .{});
+    compile.root_module.linkSystemLibrary("GLESv2", .{});
+    compile.root_module.linkSystemLibrary("m", .{});
+    compile.root_module.linkSystemLibrary("dl", .{});
+    compile.root_module.link_libc = true;
+    compile.link_emit_relocs = false;
+    compile.rdynamic = true;
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -33,6 +116,24 @@ pub fn build(b: *std.Build) void {
         "Number of chunk meshing worker threads (0 = pick from the cpu count)",
     ) orelse 0;
 
+    // Android is not a target you can just point zig at: the libc is the NDK's,
+    // and so are the headers, the crt and the glue that turns a shared library
+    // into an app. The path is a build option rather than a guess because there
+    // is no sensible place for it to live.
+    const android_ndk = b.option(
+        []const u8,
+        "android-ndk",
+        "Path to the Android NDK, for -Dtarget=aarch64-linux-android and friends",
+    ) orelse std.process.getEnvVarOwned(b.allocator, "ANDROID_NDK_HOME") catch "";
+
+    const android_api = b.option(
+        []const u8,
+        "android-api",
+        "Android API level to build against (21 is Android 5.0, which is as far back as a current NDK goes)",
+    ) orelse "21";
+
+    const is_android = target.result.abi.isAndroid();
+
     const build_options = b.addOptions();
     build_options.addOption(u32, "mesher_threads", mesher_threads);
 
@@ -42,6 +143,11 @@ pub fn build(b: *std.Build) void {
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
+        // Ignored unless the target is Android. Left at the default OpenGL
+        // version on purpose: for Android that is GL ES 2.0, which is what
+        // every device made since about 2010 can run.
+        .android_ndk = android_ndk,
+        .android_api_version = android_api,
     });
     const tracy_dep = b.dependency("tracy", .{
         .target = target,
@@ -171,23 +277,39 @@ pub fn build(b: *std.Build) void {
     io_mod.addImport("engine", engine_mod);
 
     // Client executable
-    const exe = b.addExecutable(.{
-        .name = "maincraft",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                // Internal
-                .{ .name = "io", .module = io_mod },
-                // Dependencies
-                .{ .name = "network", .module = network_dep.module("network") },
-                .{ .name = "tracy", .module = tracy_dep.module("tracy") },
-            },
-        }),
+    const root_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            // Internal
+            .{ .name = "io", .module = io_mod },
+            // Dependencies
+            .{ .name = "network", .module = network_dep.module("network") },
+            .{ .name = "tracy", .module = tracy_dep.module("tracy") },
+        },
     });
 
-    exe.root_module.addImport("tracy_impl", tracy_impl_mod);
+    root_mod.addImport("tracy_impl", tracy_impl_mod);
+
+    // An Android app is a shared library that the system's NativeActivity opens
+    // and calls ANativeActivity_onCreate in. That symbol comes from the NDK's
+    // glue, which raylib expects to be there but does not build, so it is
+    // compiled in here.
+    const exe = if (is_android) b.addLibrary(.{
+        .name = "maincraft",
+        .linkage = .dynamic,
+        .root_module = root_mod,
+    }) else b.addExecutable(.{
+        .name = "maincraft",
+        .root_module = root_mod,
+    });
+
+    if (is_android) {
+        addAndroidSupport(b, exe, target, android_ndk, android_api);
+        // ...and to raylib, whose own copy of this file comes out empty
+        addAndroidSupport(b, raylib_dep.artifact("raylib"), target, android_ndk, android_api);
+    }
 
     b.installArtifact(exe);
 
