@@ -185,3 +185,40 @@ test "the world grows around the player" {
 
     try std.testing.expectEqual(@as(?terrain.Slot, null), world.getChunk(.{ .x = 0, .z = 0 }));
 }
+
+test "there is no edge: the world generates the same a million blocks out" {
+    const alloc = std.testing.allocator;
+
+    var world: terrain.World = try .init(alloc);
+    defer world.deinit();
+
+    var singleplayer: Singleplayer = .init(alloc, &world, 42);
+    singleplayer.view_distance = 1;
+
+    // Nothing about the generator or the store is anchored to the origin, and
+    // chunk coordinates are i32, so this is a long way from any limit. What is
+    // being asserted is that there is no barrier to walk into: the ring is
+    // built around wherever the player is.
+    const far: coord.Vec3f = .{ .x = 1_000_000.5, .y = 80, .z = -1_000_000.5 };
+    for (0..64) |_|
+        try singleplayer.update(far);
+
+    const center = far.getBlock().getChunk();
+    var dx: i32 = -1;
+    while (dx <= 1) : (dx += 1) {
+        var dz: i32 = -1;
+        while (dz <= 1) : (dz += 1) {
+            const slot = world.getChunk(.{ .x = center.x + dx, .z = center.z + dz });
+            try std.testing.expect(slot != null);
+        }
+    }
+
+    // And the terrain out there is terrain, not an empty column
+    var solid = false;
+    var y: i32 = 0;
+    while (y < 128) : (y += 1) {
+        if (world.getBlockId(.{ .x = 1_000_000, .y = y, .z = -1_000_000 }) != 0)
+            solid = true;
+    }
+    try std.testing.expect(solid);
+}

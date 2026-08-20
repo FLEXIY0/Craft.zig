@@ -14,6 +14,10 @@ uniform mat4 mvp;
 
 // Output vertex attributes (to fragment shader)
 out vec2 fragTexCoord;
+// Distance from the eye, along the view axis. For a perspective projection the
+// w of the clip position is exactly that, which is the same quantity the fixed
+// function pipeline used to fog with, so no extra uniform is needed
+out float fragFogDepth;
 // The whole quad shares one tile: no interpolation, no rounding surprises
 flat out vec2 fragTileOrigin;
 out vec4 fragColor;
@@ -25,4 +29,5 @@ void main()
     fragColor = vertexColor;
 
     gl_Position = mvp*vec4(vertexPosition, 1.0);
+    fragFogDepth = gl_Position.w;
 }

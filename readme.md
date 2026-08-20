@@ -19,7 +19,13 @@ up over a running world. Options are kept in `craft_options.txt` next to the
 executable.
 
 The frame rate is drawn in the corner, and F3 breaks the frame down into what
-the engine costs and what the graphics driver costs.
+the engine costs and what the graphics driver costs. **F** cycles the render
+distance the way the classic client did, without opening a screen.
+
+The world has no edge: chunks are generated around wherever the player is, so
+walking never runs out of ground. What is drawn fades into the sky over the last
+stretch of the render distance, which is what keeps the far side of it from
+being a cliff of terrain against open sky.
 
 ## Introduction
 

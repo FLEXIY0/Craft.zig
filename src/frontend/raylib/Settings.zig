@@ -22,19 +22,49 @@ fps_cap: i32 = 60,
 /// Draw the frame rate in the corner
 show_fps: bool = true,
 
-/// The range each setting is allowed to take, so that the options screen and a
-/// hand edited file agree on what is valid
+/// The range each setting is offered in. This is what the options screen's
+/// sliders span, not a hard limit: see `hard_limits`.
 pub const limits = struct {
-    pub const view_distance = .{ .min = 2, .max = 16 };
+    pub const view_distance = .{ .min = 2, .max = 32 };
     pub const fov = .{ .min = 30, .max = 110 };
     pub const sensitivity = .{ .min = 1, .max = 30 };
     pub const fps_cap = .{ .min = 0, .max = 480 };
 };
 
+/// What a value is held to whatever it came from.
+///
+/// The view distance is the one setting where the slider is not the limit. What
+/// it costs is memory and patience -- a radius of n loads (2n+1)^2 chunks at
+/// 80 KiB of block data each, and the generator fills two of them a frame --
+/// so a slider that goes far past what is comfortable is a trap, while a
+/// command line or a hand edited file asking for more is somebody who means it.
+/// The ceiling here is only where the projection stops: raylib draws out to
+/// 4000 blocks, which is 250 chunks.
+pub const hard_limits = struct {
+    pub const view_distance = .{ .min = 2, .max = 250 };
+};
+
+/// The view distances the F key steps through, largest first, the way the
+/// classic client cycled Far, Normal, Short and Tiny
+pub const view_distance_steps = [_]i32{ 32, 16, 8, 4, 2 };
+
+/// Moves to the next view distance of `view_distance_steps`, wrapping. A value
+/// that is not one of the steps (the slider gives plenty) drops to the largest
+/// step below it, so the key always makes the world smaller first.
+pub fn cycleViewDistance(self: *Settings) void {
+    for (view_distance_steps) |step| {
+        if (step < self.view_distance) {
+            self.view_distance = step;
+            return;
+        }
+    }
+    self.view_distance = view_distance_steps[0];
+}
+
 /// Brings every value back inside its range, so a hand edited file can not
 /// produce a camera with a field of view of nine thousand
 pub fn clampAll(self: *Settings) void {
-    self.view_distance = std.math.clamp(self.view_distance, limits.view_distance.min, limits.view_distance.max);
+    self.view_distance = std.math.clamp(self.view_distance, hard_limits.view_distance.min, hard_limits.view_distance.max);
     self.fov = std.math.clamp(self.fov, limits.fov.min, limits.fov.max);
     self.sensitivity = std.math.clamp(self.sensitivity, limits.sensitivity.min, limits.sensitivity.max);
     self.fps_cap = std.math.clamp(self.fps_cap, limits.fps_cap.min, limits.fps_cap.max);
@@ -131,6 +161,35 @@ test "parsing reads every kind of field and skips the rest" {
     try testing.expectEqual(@as(i32, 60), settings.fps_cap);
 }
 
+test "the F key steps down through the classic distances and wraps" {
+    var settings: Settings = .{ .view_distance = 32 };
+
+    for ([_]i32{ 16, 8, 4, 2, 32, 16 }) |expected| {
+        settings.cycleViewDistance();
+        try testing.expectEqual(expected, settings.view_distance);
+    }
+}
+
+test "a distance off the ladder drops to the step below it" {
+    var settings: Settings = .{ .view_distance = 12 };
+    settings.cycleViewDistance();
+    try testing.expectEqual(@as(i32, 8), settings.view_distance);
+}
+
+test "the view distance is held to the hard limit, not to the slider" {
+    var settings: Settings = .{};
+    settings.parse("view_distance 64");
+    settings.clampAll();
+
+    // Past what the options screen offers, because what it costs is memory
+    // rather than correctness
+    try testing.expectEqual(@as(i32, 64), settings.view_distance);
+
+    settings.parse("view_distance 100000");
+    settings.clampAll();
+    try testing.expectEqual(hard_limits.view_distance.max, settings.view_distance);
+}
+
 test "values out of range are brought back in" {
     var settings: Settings = .{};
     settings.parse(
@@ -139,7 +198,7 @@ test "values out of range are brought back in" {
     );
     settings.clampAll();
 
-    try testing.expectEqual(limits.view_distance.max, settings.view_distance);
+    try testing.expectEqual(hard_limits.view_distance.max, settings.view_distance);
     try testing.expectEqual(limits.fov.min, settings.fov);
 }
 

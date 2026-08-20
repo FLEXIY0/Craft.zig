@@ -57,6 +57,9 @@ at:
   `ui/Ui.zig`.
 - **The crosshair, the frame rate, the F3 overlay** — `GameWindow.zig`,
   `drawGui`.
+- **The distance fade** — `frontend/raylib/Fog.zig` for the two numbers,
+  `res/shaders/chunk.fs` for the fade itself. The depth it fades over is the `w`
+  of the clip position, so there is no camera uniform to keep in step.
 - **What a frame is spent on** — `FrameStats.zig`, and `--stats` to print it.
 - **Which geometry is drawn at all** — `frontend/raylib/VisibleSet.zig` decides,
   `meshing/visibility.zig` says what can be seen through, and

@@ -91,6 +91,16 @@ const Session = struct {
         window.enterGame(&self.client.game);
     }
 
+    /// The view distance can change while a world is running, from the options
+    /// screen or from the F key. Only a single player world generates its own
+    /// chunks; on a server the radius is the server's to decide.
+    fn setViewDistance(self: *Session, view_distance: i32) void {
+        if (!self.running)
+            return;
+        if (self.client.singleplayer) |*singleplayer|
+            singleplayer.view_distance = view_distance;
+    }
+
     fn stop(self: *Session, window: *GameWindow) void {
         if (!self.running)
             return;
@@ -146,6 +156,7 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     var report: std.time.Timer = try .start();
 
     var last_fps_cap = settings.fps_cap;
+    var last_view_distance = settings.view_distance;
 
     while (!window.hasClosed()) {
         const dt = rl.getFrameTime();
@@ -156,6 +167,13 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
             rl.setTargetFPS(@intCast(settings.fps_cap));
         }
 
+        // ...and the view distance, which the running world has to be told
+        // about, or it keeps generating the old radius
+        if (settings.view_distance != last_view_distance) {
+            last_view_distance = settings.view_distance;
+            session.setViewDistance(settings.view_distance);
+        }
+
         timer.reset();
 
         // A world only ticks while the player is actually in it
@@ -163,6 +181,11 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
             if (!try session.client.update(dt))
                 break;
             try window.update(dt);
+
+            // F cycles the view distance the way the classic client did, so it
+            // can be turned down without opening a screen
+            if (rl.isKeyPressed(.f))
+                settings.cycleViewDistance();
 
             if (rl.isKeyPressed(.escape))
                 pauseGame(&menu, &window);

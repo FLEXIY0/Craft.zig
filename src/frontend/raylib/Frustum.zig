@@ -13,9 +13,12 @@ const chunk = terrain.chunk;
 
 const Frustum = @This();
 
-/// Same near and far planes as rlgl uses for its own projection
-const near_plane = 0.01;
-const far_plane = 1000.0;
+/// The same near and far planes rlgl builds its own projection with
+/// (RL_CULL_DISTANCE_NEAR and RL_CULL_DISTANCE_FAR). They have to match: a
+/// nearer far plane here culls sections the renderer would have drawn, which is
+/// invisible at a small view distance and a hole in the world at a large one.
+const near_plane = 0.05;
+const far_plane = 4000.0;
 
 /// The six planes, as (a, b, c, d) with a*x + b*y + c*z + d >= 0 inside
 planes: [6][4]f32,

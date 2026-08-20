@@ -15,6 +15,7 @@ const FrameStats = @import("FrameStats.zig");
 const VisibleSet = @import("VisibleSet.zig");
 const ChunkBatch = @import("ChunkBatch.zig");
 const Settings = @import("Settings.zig");
+const Fog = @import("Fog.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -48,6 +49,8 @@ stats: FrameStats = .{},
 visible: VisibleSet,
 /// What the player chose in the options screen
 settings: *const Settings,
+/// The distance fade, kept in step with the view distance every frame
+fog: Fog,
 
 /// The options decide the frame cap, the field of view and the sensitivity, so
 /// the window needs them from the start. A cap of zero runs the loop uncapped,
@@ -84,6 +87,7 @@ pub fn init(alloc: std.mem.Allocator, settings: *const Settings) !GameWindow {
         .visible = .init(alloc),
         .settings = settings,
         .chunk_mat = res_mana.materials.get("chunk").?,
+        .fog = .init(res_mana.materials.get("chunk").?.shader, sky_color),
         .compass = res_mana.models.get("compass.glb").?,
         .icons = res_mana.textures.get("icons.png"),
         .crosshair = res_mana.textures.get("crosshair.png"),
@@ -197,6 +201,7 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         const time = game.time.load(.unordered);
         const block_id = if (self.selected_block) |selected| game.world.getBlockId(selected) else 0;
         self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}\n" ++
+            "view distance: {} chunks (F cycles it)\n" ++
             "chunks: {} drawn / {} loaded, {} sections\ntriangles: {}, draw calls: {}\n" ++
             "engine: {d:.2} ms (update {d:.2} + submit {d:.2})\npresent: {d:.2} ms", .{
             cam_pos,
@@ -210,6 +215,7 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             block_id,
             blocks.nameOf(block_id),
             game.player.health,
+            self.settings.view_distance,
             self.stats.chunks_drawn,
             self.stats.chunks_loaded,
             self.stats.sections_drawn,
@@ -289,10 +295,15 @@ pub fn drawWorld(self: *GameWindow) void {
     var triangles: u32 = 0;
     var draw_calls: u32 = 0;
 
+    // The fade has to end where the chunks do, and the view distance can change
+    // while the world is running: the F key cycles it and so does the options
+    // screen
+    self.fog.setViewDistance(self.settings.view_distance, terrain.chunk.width);
+
     // The shader, the terrain texture and the camera matrices are the same for
     // every chunk of the frame: the batch uploads them once instead of once per
     // section, which is most of what a draw used to cost
-    var batch: ChunkBatch = .begin(self.chunk_mat);
+    var batch: ChunkBatch = .begin(self.chunk_mat, self.fog);
 
     for (self.visible.visible.items) |entry| {
         const model = store.model.get(entry.slot) orelse continue;

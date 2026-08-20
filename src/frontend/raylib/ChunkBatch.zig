@@ -29,6 +29,7 @@ const terrain = @import("terrain");
 
 const chunk = terrain.chunk;
 const ChunkModel = @import("ChunkModel.zig");
+const Fog = @import("Fog.zig");
 
 const ChunkBatch = @This();
 
@@ -58,8 +59,10 @@ fn slotOf(shader: rl.Shader, index: rl.ShaderLocationIndex) Slot {
     return if (location < 0) null else location;
 }
 
-/// Binds everything a frame's worth of chunks has in common
-pub fn begin(material: *const rl.Material) ChunkBatch {
+/// Binds everything a frame's worth of chunks has in common. The fog is part of
+/// that: it only changes when the view distance does, so it belongs here rather
+/// than in the per chunk state.
+pub fn begin(material: *const rl.Material, fog: Fog) ChunkBatch {
     const shader = material.shader;
 
     var self: ChunkBatch = .{
@@ -81,6 +84,8 @@ pub fn begin(material: *const rl.Material) ChunkBatch {
         rl.gl.rlSetUniformMatrix(location, self.view);
     if (self.loc_projection) |location|
         rl.gl.rlSetUniformMatrix(location, self.projection);
+
+    fog.upload();
 
     // The diffuse colour and the terrain texture are the same for every chunk
     const map = self.material.maps[0];
