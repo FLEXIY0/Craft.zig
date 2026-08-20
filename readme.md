@@ -1,4 +1,4 @@
-# Maincraft
+# Maincraft on Zig
 
 Minecraft compatible client for beta 1.7.3 servers.
 
