@@ -6,8 +6,8 @@ the commit it came from is the commit that added it.
 
 | | |
 |---|---|
-| Size | 1.6 MB |
-| SHA-256 | `7be0244e3a63f15d49949a77e4f6a46cb585d39c1f8b4a1b37f8d43cddd65efe` |
+| Size | 3.4 MB |
+| SHA-256 | `6e508478b968d631a08b5cdd90dca8ec3e1717b76f215816f7c61727f0c51276` |
 | Signing certificate | `4bc67728ff174b924671b3c0c20c2dc7e549a79e2546b2db41870ab99ad9db02` |
 | Android | 5.0 and up (API 21) |
 | Graphics | OpenGL ES 2.0 |
