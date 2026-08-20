@@ -52,9 +52,20 @@ window_geometry() {
 case "${1:-}" in
 start)
     shift
-    pgrep -x Xvfb > /dev/null || {
+    # Xvfb dies quietly and leaves the process table looking fine, so the
+    # display itself is what gets asked, not pgrep
+    DISPLAY="$display" xdotool getdisplaygeometry > /dev/null 2>&1 || {
+        pkill -f "Xvfb $display" 2>/dev/null || true
         Xvfb "$display" -screen 0 "$screen" > "$state/xvfb.log" 2>&1 &
-        sleep 1
+        for _ in $(seq 40); do
+            DISPLAY="$display" xdotool getdisplaygeometry > /dev/null 2>&1 && break
+            sleep 0.25
+        done
+    }
+
+    DISPLAY="$display" xdotool getdisplaygeometry > /dev/null 2>&1 || {
+        echo "No X server on $display (see $state/xvfb.log)" >&2
+        exit 1
     }
 
     pkill -f 'zig-out/bin/maincraft' 2>/dev/null || true
@@ -88,6 +99,31 @@ click)
     sleep 0.3
     xdotool mouseup 1
     sleep 0.5
+    ;;
+
+hold)
+    # Press and keep the pointer down, for the on screen stick: the client has
+    # to see it held across several frames, not for the instant of a click
+    read -r x y _ _ <<< "$(window_geometry)"
+    xdotool mousemove $((x + ${2:?x})) $((y + ${3:?y}))
+    sleep 0.2
+    xdotool mousedown 1
+    sleep "${4:-1.5}"
+    xdotool mouseup 1
+    sleep 0.4
+    ;;
+
+drag)
+    # Press at the first point, move to the second while held, release
+    read -r x y _ _ <<< "$(window_geometry)"
+    xdotool mousemove $((x + ${2:?x1})) $((y + ${3:?y1}))
+    sleep 0.2
+    xdotool mousedown 1
+    sleep 0.3
+    xdotool mousemove $((x + ${4:?x2})) $((y + ${5:?y2}))
+    sleep 0.4
+    xdotool mouseup 1
+    sleep 0.4
     ;;
 
 move)
