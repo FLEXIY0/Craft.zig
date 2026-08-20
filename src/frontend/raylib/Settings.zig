@@ -5,8 +5,18 @@
 //! rather than being an error, and a missing file just means the defaults.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Settings = @This();
+
+/// A phone has no keyboard and no mouse, so the on screen controls are on there
+/// and off where there is one. Both can be changed in the options: a tablet
+/// with a keyboard exists, and so does someone who wants to try the controls on
+/// a desktop.
+const touch_by_default = switch (builtin.target.abi) {
+    .android, .androideabi => true,
+    else => false,
+};
 
 /// Name of the file, in the working directory the client was started from
 pub const path = "craft_options.txt";
@@ -21,6 +31,8 @@ sensitivity: i32 = 10,
 fps_cap: i32 = 60,
 /// Draw the frame rate in the corner
 show_fps: bool = true,
+/// Draw the walking stick, the jump button and the look area
+touch_controls: bool = touch_by_default,
 
 /// The range each setting is offered in. This is what the options screen's
 /// sliders span, not a hard limit: see `hard_limits`.

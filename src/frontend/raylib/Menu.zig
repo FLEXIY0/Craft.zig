@@ -60,6 +60,14 @@ port_text: Ui.Text = .from("25565"),
 in_game: bool = false,
 /// True while the menu is on screen and owns the pointer and the keyboard
 visible: bool = true,
+/// Set when the menu was opened by a press that is still in flight.
+///
+/// The press that opens the menu belongs to the world, but the menu is drawn on
+/// that same frame, and raylib puts the cursor back in the middle of the window
+/// when it is released -- which is where a button usually is. Without this, one
+/// tap on the on screen menu button opened the menu and pressed whatever was
+/// under the centre of the screen.
+swallow_click: bool = false,
 
 pub fn init(settings: *Settings) Menu {
     var self: Menu = .{
@@ -85,6 +93,7 @@ pub fn pause(self: *Menu) void {
     std.debug.assert(self.in_game);
     self.screen = .paused;
     self.visible = true;
+    self.swallow_click = true;
 }
 
 /// Puts the player back in the world
@@ -114,6 +123,11 @@ pub fn draw(self: *Menu) Action {
     const height: f32 = @floatFromInt(rl.getScreenHeight());
 
     self.ui.beginFrame();
+
+    if (self.swallow_click) {
+        self.swallow_click = false;
+        self.ui.click_consumed = true;
+    }
 
     if (self.in_game) {
         // There is a world behind the menu: leave it visible and dim it, which
@@ -323,8 +337,9 @@ fn drawOptions(self: *Menu, width: f32, height: f32) Action {
         Settings.limits.fps_cap.max,
     );
     _ = self.ui.toggle(row(width, top, 4), "Show FPS", &self.settings.show_fps);
+    _ = self.ui.toggle(row(width, top, 5), "Touch Controls", &self.settings.touch_controls);
 
-    if (self.ui.button(row(width, top, 5.4), "Done")) {
+    if (self.ui.button(row(width, top, 6.4), "Done")) {
         self.settings.save();
         self.screen = self.options_return;
     }

@@ -138,7 +138,8 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
         std.log.info("Generating a world...", .{});
         try session.startLocal(alloc, &window, options.seed, settings.view_distance);
         menu.enterGame();
-        rl.disableCursor();
+        if (!settings.touch_controls)
+            rl.disableCursor();
     } else if (options.server) {
         std.log.info("Connecting...", .{});
         session.startRemote(alloc, &window, options.address, options.port) catch |err| {
@@ -146,7 +147,8 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
             return;
         };
         menu.enterGame();
-        rl.disableCursor();
+        if (!settings.touch_controls)
+            rl.disableCursor();
     }
 
     // Splitting the frame in "what the engine does" and "what the driver does"
@@ -187,7 +189,7 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
             if (rl.isKeyPressed(.f))
                 settings.cycleViewDistance();
 
-            if (rl.isKeyPressed(.escape))
+            if (rl.isKeyPressed(.escape) or window.takePauseRequest())
                 pauseGame(&menu, &window);
         } else if (session.running) {
             // Paused: no time passes for the world, but the generator and the
@@ -252,18 +254,28 @@ pub fn main(default_alloc: std.mem.Allocator) !void {
     settings.save();
 }
 
-/// Gives the world the pointer and the keyboard back
+/// Gives the world the pointer and the keyboard back.
+///
+/// The cursor is only captured when the player is looking around with a mouse.
+/// With the on screen controls the look comes from a drag, and a captured
+/// cursor would mean nothing can be touched -- which is also what a phone has,
+/// where there is no cursor to capture in the first place.
 fn resumeGame(menu: *Menu, window: *GameWindow) void {
     if (!menu.in_game)
         menu.enterGame();
     menu.unpause();
     window.focused = true;
-    rl.disableCursor();
+    window.touch.release();
+    if (!window.settings.touch_controls)
+        rl.disableCursor();
 }
 
 /// Puts the pause menu up over the world
 fn pauseGame(menu: *Menu, window: *GameWindow) void {
     menu.pause();
     window.focused = false;
+    // A finger that is still down belongs to the button that opened the menu,
+    // not to the stick
+    window.touch.release();
     rl.enableCursor();
 }

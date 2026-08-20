@@ -16,6 +16,7 @@ const VisibleSet = @import("VisibleSet.zig");
 const ChunkBatch = @import("ChunkBatch.zig");
 const Settings = @import("Settings.zig");
 const Fog = @import("Fog.zig");
+const TouchControls = @import("TouchControls.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -30,7 +31,9 @@ cube_position: rl.Vector3,
 first_player_pos: bool = true,
 focused: bool = true,
 f3_enabled: bool = false,
-f3_buf: [512]u8 = undefined,
+// Big enough for the debug text at coordinates with every digit of an f64 in
+// them, which is what a player a million blocks from the origin has
+f3_buf: [1024]u8 = undefined,
 f3_str: [:0]const u8 = undefined,
 freecam: bool = false,
 wiremesh: bool = false,
@@ -51,6 +54,10 @@ visible: VisibleSet,
 settings: *const Settings,
 /// The distance fade, kept in step with the view distance every frame
 fog: Fog,
+/// The on screen stick, buttons and look area
+touch: TouchControls = .{},
+/// Set when the on screen menu button is pressed, read by the frame loop
+pause_requested: bool = false,
 
 /// The options decide the frame cap, the field of view and the sensitivity, so
 /// the window needs them from the start. A cap of zero runs the loop uncapped,
@@ -88,12 +95,26 @@ pub fn init(alloc: std.mem.Allocator, settings: *const Settings) !GameWindow {
         .settings = settings,
         .chunk_mat = res_mana.materials.get("chunk").?,
         .fog = .init(res_mana.materials.get("chunk").?.shader, sky_color),
+        .touch = .{},
         .compass = res_mana.models.get("compass.glb").?,
         .icons = res_mana.textures.get("icons.png"),
         .crosshair = res_mana.textures.get("crosshair.png"),
         .window_size = .{ .x = @floatFromInt(rl.getScreenWidth()), .y = @floatFromInt(rl.getScreenHeight()) },
         .heal_hurt = 0,
     };
+}
+
+/// Degrees turned per pixel of drag, at the middle sensitivity
+const touch_look_scale = 0.12;
+
+/// How far the stick has to be pushed along an axis before it counts as that
+/// direction
+const walk_threshold = 0.35;
+
+/// True once, for the frame the on screen menu button was pressed
+pub fn takePauseRequest(self: *GameWindow) bool {
+    defer self.pause_requested = false;
+    return self.pause_requested;
 }
 
 pub fn hasClosed(_: GameWindow) bool {
@@ -105,6 +126,16 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         return;
 
     const game = self.game.?;
+
+    // A finger is read even when the window is not focused in the desktop
+    // sense: on a phone there is nothing else to be focused
+    const touch: TouchControls.State = if (self.settings.touch_controls)
+        self.touch.update(self.window_size)
+    else
+        .{};
+
+    if (touch.pause)
+        self.pause_requested = true;
 
     if (rl.isKeyPressed(.f3) and self.focused) {
         self.f3_enabled = !self.f3_enabled;
@@ -132,7 +163,17 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             // Look around code
             // Take mouse movement in account
             const sensitivity: f32 = @floatFromInt(self.settings.sensitivity);
-            self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * sensitivity));
+
+            // With the on screen controls up the cursor is not captured, and a
+            // free cursor entering the window reports a delta of half a screen:
+            // looking around is the drag's job then, not the pointer's
+            if (!self.settings.touch_controls)
+                self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * sensitivity));
+
+            // A drag is already a distance, so unlike the mouse it must not be
+            // scaled by the frame time: the same swipe has to turn the same
+            // amount whatever the frame rate is
+            self.cam_rot = self.cam_rot.add(touch.look.scale(touch_look_scale * sensitivity / 10));
             // Clamp vertical rotation
             if (self.cam_rot.y > 89.9)
                 self.cam_rot.y = 89.9;
@@ -153,20 +194,23 @@ pub fn update(self: *GameWindow, delta: f32) !void {
 
             game.player.setHeadAngle(self.cam_rot.x, self.cam_rot.y);
 
-            // Player movement
-            if (rl.isKeyDown(.w)) {
+            // Player movement. The player walks in whole directions rather
+            // than at a speed, so the stick is read as eight of them: a
+            // threshold that is not half of the travel is what makes the
+            // diagonals reachable without hunting for them.
+            if (rl.isKeyDown(.w) or touch.move.y < -walk_threshold) {
                 game.player.walkForwards();
             }
-            if (rl.isKeyDown(.a)) {
+            if (rl.isKeyDown(.a) or touch.move.x < -walk_threshold) {
                 game.player.walkLeft();
             }
-            if (rl.isKeyDown(.s)) {
+            if (rl.isKeyDown(.s) or touch.move.y > walk_threshold) {
                 game.player.walkBackwards();
             }
-            if (rl.isKeyDown(.d)) {
+            if (rl.isKeyDown(.d) or touch.move.x > walk_threshold) {
                 game.player.walkRight();
             }
-            if (rl.isKeyDown(.space))
+            if (rl.isKeyDown(.space) or touch.jump)
                 game.player.jump();
 
             // TODO: move that piece of code to player
@@ -200,7 +244,11 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         const pos_in_chunk = pos_block.getPosInChunk();
         const time = game.time.load(.unordered);
         const block_id = if (self.selected_block) |selected| game.world.getBlockId(selected) else 0;
-        self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}\n" ++
+        // A debug overlay that does not fit is a debug overlay that says so.
+        // It used to be a `try`, which turned a long coordinate into the end of
+        // the client -- and coordinates get long exactly where the world is
+        // most interesting to look at.
+        self.f3_str = std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}\n" ++
             "view distance: {} chunks (F cycles it)\n" ++
             "chunks: {} drawn / {} loaded, {} sections\ntriangles: {}, draw calls: {}\n" ++
             "engine: {d:.2} ms (update {d:.2} + submit {d:.2})\npresent: {d:.2} ms", .{
@@ -225,7 +273,7 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             self.stats.update,
             self.stats.submit,
             self.stats.present,
-        });
+        }) catch "debug text does not fit";
     }
 }
 
@@ -445,6 +493,12 @@ pub fn drawGui(self: GameWindow) void {
     } else {
         rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
     }
+
+    // The stick and the buttons go under the rest of the overlay, so a debug
+    // screen is never hidden behind a thumb rest -- and they go away entirely
+    // while the menu is up, which is what `focused` means here
+    if (self.settings.touch_controls and self.focused)
+        self.touch.draw(self.window_size);
 
     // Frame rate, top right corner. Written out here rather than through
     // rl.drawFPS, which has no shadow and picks a colour that vanishes over
