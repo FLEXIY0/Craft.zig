@@ -40,6 +40,61 @@ Two things that trip people up:
 `docs/io_api.md` claims the default frontend is `dummy`. It is `raylib`
 (`build.zig`).
 
+## Making a change without hunting for the place
+
+Most changes land in one file, and it is usually not the one the symptom points
+at:
+
+- **A block, or how one behaves** — `blocks/definitions.zig`, one line. New
+  behaviour is a flag on `Block.Flags` and a set in `blocks/registry.zig`, never
+  a comparison against an id.
+- **An option the player can set** — one field on `frontend/raylib/Settings.zig`.
+  The parser, the writer and the range check are generated from the fields, so
+  the field is the whole change.
+- **A menu screen** — `frontend/raylib/Menu.zig`, one `draw*` function per
+  screen, laid out with `row` / `labelledRow` / `halfRow`.
+- **How a widget looks** — `frontend/raylib/ui/Theme.zig`. How it behaves —
+  `ui/Ui.zig`.
+- **The crosshair, the frame rate, the F3 overlay** — `GameWindow.zig`,
+  `drawGui`.
+- **What a frame is spent on** — `FrameStats.zig`, and `--stats` to print it.
+- **Which geometry is drawn at all** — `frontend/raylib/VisibleSet.zig` decides,
+  `meshing/visibility.zig` says what can be seen through, and
+  `meshing/greedy.zig` (`mergePlane`) decides how it is merged.
+
+Two habits that save a rebuild:
+
+- The linker prints about twenty `ld.lld: warning:` lines every build. Filter
+  them so a real error is visible: `zig build 2>&1 | grep -v 'warning(link)'`.
+- A struct that is returned by value must not hold a pointer into itself. It
+  compiles, it runs, and it draws out of a dead stack frame — `Menu` had exactly
+  that bug, and `engine.Client` is initialised in place to avoid it.
+
+## Seeing a change
+
+There is no screen on a build machine, so the client is driven on a virtual X
+server. `tools/headless.sh` wraps that, and every coordinate it takes is
+relative to the client window — the same ones read off a screenshot:
+
+```sh
+zig build                                    # the raylib frontend, not dummy
+tools/headless.sh start --singleplayer --seed=4242
+tools/headless.sh shot /tmp/shot.png
+tools/headless.sh click 400 200              # a menu button
+tools/headless.sh type "my world"
+tools/headless.sh key Escape
+tools/headless.sh log                        # the client's own output
+tools/headless.sh stop
+```
+
+Clicks have to be slow — a press and a release inside one frame is one raylib
+never sees — and the script already sleeps between them. Keys go through XTEST,
+because GLFW ignores the `XSendEvent` path `xdotool key --window` uses.
+
+The frame rate measured this way is Mesa's software rasteriser, not the engine:
+`--stats` splits the frame, and `update` is the part this codebase owns.
+
+
 ## Assets
 
 `res/jar/minecraft/` (an unpacked b1.7.3 jar) is optional and gitignored. Without
