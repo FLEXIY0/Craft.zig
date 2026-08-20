@@ -42,7 +42,6 @@ pub const Action = union(enum) {
     quit,
 };
 
-theme: Theme,
 ui: Ui,
 settings: *Settings,
 
@@ -64,18 +63,16 @@ visible: bool = true,
 
 pub fn init(settings: *Settings) Menu {
     var self: Menu = .{
-        .theme = .load(),
-        .ui = undefined,
+        .ui = .init(.load()),
         .settings = settings,
     };
-    self.ui = .init(&self.theme);
     self.address_text.allowed = Ui.address_chars;
     self.port_text.allowed = Ui.digits;
     return self;
 }
 
 pub fn deinit(self: *Menu) void {
-    self.theme.unload();
+    self.ui.theme.unload();
 }
 
 /// True while the menu wants the pointer and the keyboard
@@ -123,7 +120,7 @@ pub fn draw(self: *Menu) Action {
         // is what makes the pause menu feel like a pause rather than a screen
         rl.drawRectangle(0, 0, @intFromFloat(width), @intFromFloat(height), Theme.pause_veil);
     } else {
-        self.theme.drawBackground(width, height);
+        self.ui.theme.drawBackground(width, height);
     }
 
     return switch (self.screen) {
@@ -173,8 +170,8 @@ fn halfRow(width: f32, top: f32, index: f32, right: bool) rl.Rectangle {
 }
 
 fn drawTitle(self: *Menu, width: f32, height: f32) Action {
-    self.theme.drawTextCentred("Craft.zig", width / 2, height * 0.18, Theme.title_size, Theme.text_colour);
-    self.theme.drawTextCentred(
+    self.ui.theme.drawTextCentred("Craft.zig", width / 2, height * 0.18, Theme.title_size, Theme.text_colour);
+    self.ui.theme.drawTextCentred(
         "a data oriented minecraft beta 1.7.3 client",
         width / 2,
         height * 0.18 + Theme.title_size + 6,
@@ -204,7 +201,7 @@ fn drawTitle(self: *Menu, width: f32, height: f32) Action {
 }
 
 fn drawCreateWorld(self: *Menu, width: f32, height: f32) Action {
-    self.theme.drawTextCentred("Create New World", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
+    self.ui.theme.drawTextCentred("Create New World", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
 
     const top = height * 0.28;
 
@@ -243,7 +240,7 @@ fn drawCreateWorld(self: *Menu, width: f32, height: f32) Action {
 
 /// Writes a field's label just above it
 fn drawLabel(self: *const Menu, text: [:0]const u8, field: rl.Rectangle) void {
-    self.theme.drawText(text, field.x, field.y - label_height + 2, Theme.text_size * 0.8, Theme.hint_colour);
+    self.ui.theme.drawText(text, field.x, field.y - label_height + 2, Theme.text_size * 0.8, Theme.hint_colour);
 }
 
 /// The seed the player typed, or one from the clock. A seed that is not a
@@ -261,7 +258,7 @@ fn chosenSeed(self: *const Menu) u64 {
 }
 
 fn drawJoinServer(self: *Menu, width: f32, height: f32) Action {
-    self.theme.drawTextCentred("Join Server", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
+    self.ui.theme.drawTextCentred("Join Server", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
 
     const top = height * 0.3;
 
@@ -289,7 +286,7 @@ fn drawJoinServer(self: *Menu, width: f32, height: f32) Action {
 }
 
 fn drawOptions(self: *Menu, width: f32, height: f32) Action {
-    self.theme.drawTextCentred("Options", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
+    self.ui.theme.drawTextCentred("Options", width / 2, height * 0.14, Theme.title_size * 0.7, Theme.text_colour);
 
     const top = height * 0.3;
 
@@ -336,7 +333,7 @@ fn drawOptions(self: *Menu, width: f32, height: f32) Action {
 }
 
 fn drawPaused(self: *Menu, width: f32, height: f32) Action {
-    self.theme.drawTextCentred("Game menu", width / 2, height * 0.16, Theme.title_size * 0.7, Theme.text_colour);
+    self.ui.theme.drawTextCentred("Game menu", width / 2, height * 0.16, Theme.title_size * 0.7, Theme.text_colour);
 
     const top = height * 0.34;
 
@@ -363,8 +360,7 @@ const testing = std.testing;
 
 test "a blank seed is random, a number is itself, and anything else hashes" {
     var settings: Settings = .{};
-    var menu: Menu = .{ .theme = .{}, .ui = undefined, .settings = &settings };
-    menu.ui = .init(&menu.theme);
+    var menu: Menu = .{ .ui = .{}, .settings = &settings };
 
     // Not a number: stable, and not zero
     menu.seed_text.set("hello world");
@@ -384,8 +380,7 @@ test "a blank seed is random, a number is itself, and anything else hashes" {
 
 test "the menu is open outside a world, and only when paused inside one" {
     var settings: Settings = .{};
-    var menu: Menu = .{ .theme = .{}, .ui = undefined, .settings = &settings };
-    menu.ui = .init(&menu.theme);
+    var menu: Menu = .{ .ui = .{}, .settings = &settings };
 
     // No world yet: the title screen is up
     try testing.expect(menu.isOpen());

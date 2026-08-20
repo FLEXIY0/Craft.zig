@@ -385,9 +385,17 @@ pub fn drawWorld(self: *GameWindow) void {
     self.camera.end();
 }
 
+/// The overlay is drawn over whatever the world happens to be, so plain text
+/// disappears against half of it. A one pixel shadow costs a second draw and
+/// makes it readable over sky, grass and stone alike.
+fn drawOverlayText(text: [:0]const u8, x: i32, y: i32, size: i32, colour: rl.Color) void {
+    rl.drawText(text, x + 1, y + 1, size, .init(0x00, 0x00, 0x00, 0xc0));
+    rl.drawText(text, x, y, size, colour);
+}
+
 pub fn drawGui(self: GameWindow) void {
     if (self.game == null) {
-        rl.drawText("No game!", 10, 10, 20, .black);
+        drawOverlayText("No game!", 10, 10, 20, .white);
         return;
     }
 
@@ -399,7 +407,7 @@ pub fn drawGui(self: GameWindow) void {
 
     // F3 menu
     if (self.f3_enabled)
-        rl.drawText(self.f3_str, 10, 10, 20, .black);
+        drawOverlayText(self.f3_str, 10, 10, 20, .white);
 
     // Crosshair: the classic one when it is around, a ring when it is not
     if (self.crosshair) |crosshair| {
@@ -427,9 +435,16 @@ pub fn drawGui(self: GameWindow) void {
         rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
     }
 
-    // Frame rate, top right corner
-    if (self.settings.show_fps)
-        rl.drawFPS(@intFromFloat(self.window_size.x - 90), 10);
+    // Frame rate, top right corner. Written out here rather than through
+    // rl.drawFPS, which has no shadow and picks a colour that vanishes over
+    // grass.
+    if (self.settings.show_fps) {
+        var buffer: [32]u8 = undefined;
+        const text = std.fmt.bufPrintZ(&buffer, "{d} FPS", .{rl.getFPS()}) catch "";
+        const size = 20;
+        const width = rl.measureText(text, size);
+        drawOverlayText(text, @as(i32, @intFromFloat(self.window_size.x)) - width - 10, 10, size, .white);
+    }
 
     // Health bar, when the icons of a jar are around to draw it with
     if (!self.f3_enabled and !self.freecam) {

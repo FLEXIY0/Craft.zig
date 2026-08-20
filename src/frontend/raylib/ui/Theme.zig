@@ -130,17 +130,30 @@ pub fn drawBackground(self: Theme, width: f32, height: f32) void {
     }
 }
 
+/// How a plate is drawn. `sunken` is the slider track: the same plate darkened,
+/// so the knob on top of it reads as a knob and not as two vertical lines.
+pub const Plate = enum { normal, hovered, disabled, sunken };
+
 /// Draws a button plate, stretched to the rectangle asked for.
 /// The classic button texture is a flat plate with a one pixel bevel, so the
 /// three slices (left edge, middle, right edge) keep the bevel square while the
 /// middle stretches.
-pub fn drawPlate(self: Theme, rect: rl.Rectangle, hovered: bool, enabled: bool) void {
-    const texture = (if (hovered and enabled) self.button_over else self.button) orelse {
-        rl.drawRectangleRec(rect, if (hovered and enabled) rl.Color.init(0x6d, 0x6d, 0xd4, 0xff) else rl.Color.init(0x6d, 0x6d, 0x6d, 0xff));
+pub fn drawPlate(self: Theme, rect: rl.Rectangle, plate: Plate) void {
+    const texture = (if (plate == .hovered) self.button_over else self.button) orelse {
+        rl.drawRectangleRec(rect, switch (plate) {
+            .hovered => rl.Color.init(0x6d, 0x6d, 0xd4, 0xff),
+            .normal => rl.Color.init(0x6d, 0x6d, 0x6d, 0xff),
+            .disabled => rl.Color.init(0x50, 0x50, 0x50, 0xff),
+            .sunken => rl.Color.init(0x38, 0x38, 0x38, 0xff),
+        });
         return;
     };
 
-    const tint: rl.Color = if (enabled) .white else .init(0x80, 0x80, 0x80, 0xff);
+    const tint: rl.Color = switch (plate) {
+        .normal, .hovered => .white,
+        .disabled => .init(0x80, 0x80, 0x80, 0xff),
+        .sunken => .init(0x60, 0x60, 0x60, 0xff),
+    };
     const full: f32 = @floatFromInt(texture.width);
     const tall: f32 = @floatFromInt(texture.height);
 

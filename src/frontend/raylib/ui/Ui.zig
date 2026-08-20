@@ -19,7 +19,11 @@ const Ui = @This();
 /// as long as the screen is
 pub const Id = u64;
 
-theme: *const Theme,
+/// Owned by value on purpose. A pointer to a theme living next to the Ui
+/// inside the same struct would dangle the moment that struct is returned or
+/// moved, and the failure is quiet: the widgets keep drawing, out of whatever
+/// the freed frame holds.
+theme: Theme = .{},
 
 /// Pointer position this frame
 mouse: rl.Vector2 = .{ .x = 0, .y = 0 },
@@ -35,7 +39,7 @@ dragging: ?Id = null,
 /// Set once a click has been used, so one click never triggers two widgets
 click_consumed: bool = false,
 
-pub fn init(theme: *const Theme) Ui {
+pub fn init(theme: Theme) Ui {
     return .{ .theme = theme };
 }
 
@@ -82,7 +86,7 @@ pub fn button(self: *Ui, rect: rl.Rectangle, label: [:0]const u8) bool {
 /// A push button that may be greyed out
 pub fn buttonEnabled(self: *Ui, rect: rl.Rectangle, label: [:0]const u8, enabled: bool) bool {
     const hovered = self.hovering(rect);
-    self.theme.drawPlate(rect, hovered, enabled);
+    self.theme.drawPlate(rect, if (!enabled) .disabled else if (hovered) .hovered else .normal);
 
     const colour = if (enabled) Theme.text_colour else Theme.disabled_colour;
     self.theme.drawTextCentred(
@@ -124,7 +128,7 @@ pub fn slider(
         value.* = min + @as(i32, @intFromFloat(@round(t * span)));
     }
 
-    self.theme.drawPlate(rect, false, true);
+    self.theme.drawPlate(rect, .sunken);
 
     // The knob sits at the value, and is one button's worth of the track wide
     const t = @as(f32, @floatFromInt(value.* - min)) / @as(f32, @floatFromInt(max - min));
@@ -135,7 +139,8 @@ pub fn slider(
         .width = knob_width,
         .height = rect.height,
     };
-    self.theme.drawPlate(knob, hovered or self.dragging != null and self.dragging.? == id, true);
+    const grabbed = hovered or (self.dragging != null and self.dragging.? == id);
+    self.theme.drawPlate(knob, if (grabbed) .hovered else .normal);
 
     var buffer: [96]u8 = undefined;
     const text = std.fmt.bufPrintZ(&buffer, "{s}: {}", .{ label, value.* }) catch label;
@@ -174,7 +179,7 @@ pub fn textField(self: *Ui, id: Id, rect: rl.Rectangle, text: *Text, hint: [:0]c
     if (focused)
         text.handleInput();
 
-    self.theme.drawPlate(rect, focused, true);
+    self.theme.drawPlate(rect, if (focused) .hovered else .normal);
 
     const padding = 8;
     const baseline = rect.y + (rect.height - Theme.text_size) / 2;
