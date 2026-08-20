@@ -98,6 +98,34 @@ The frame rate measured this way is Mesa's software rasteriser, not the engine:
 `--stats` splits the frame, and `update` is the part this codebase owns.
 
 
+## Android
+
+`-Dtarget=aarch64-linux-android -Dandroid-ndk=<path>` builds a shared library
+rather than an executable, because that is what an Android app is: the system's
+`NativeActivity` opens it and calls `ANativeActivity_onCreate`, which comes from
+the NDK's glue. raylib expects that glue to exist but does not build it, so
+`build.zig` compiles it in.
+
+Two things to know before touching this:
+
+- raylib's own `build.zig` writes the file describing the NDK's libc using the
+  pre 0.15 spelling of `Io.Writer`, so it comes out **empty** and the build
+  stops on a parse error. `addAndroidSupport` is applied to raylib's artifact as
+  well as to ours, which replaces that file. If an NDK build fails with
+  `missing field: include_dir`, this is why.
+- The chunk shader exists twice: `chunk.vs`/`chunk.fs` for desktop GL 3.3 and
+  `chunk_es.*` for GL ES 2.0. `RessourceManager` picks by asking rlgl which
+  version it actually got, so one binary covers both. `flat` does not exist in
+  ES 2.0 and is not needed: all four vertices of a quad carry the same tile.
+
+Files the game writes (the options) go through raylib's file API, not
+`std.fs`: on Android the working directory is not writable and the assets live
+inside the APK, and raylib's reads fall back from the package to the app's own
+directory.
+
+`tools/android-build.sh` builds every ABI, `tools/android-apk.sh` packs and
+signs. Neither needs Android Studio.
+
 ## Assets
 
 `res/jar/minecraft/` (an unpacked b1.7.3 jar) is optional and gitignored. Without

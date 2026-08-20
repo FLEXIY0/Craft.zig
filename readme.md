@@ -27,6 +27,23 @@ walking never runs out of ground. What is drawn fades into the sky over the last
 stretch of the render distance, which is what keeps the far side of it from
 being a cliff of terrain against open sky.
 
+## Android
+
+The client runs on a phone, and on an old one: the floor is Android 5.0 and
+OpenGL ES 2.0, and the APK carries all four ABIs. There is no Android Studio
+anywhere in this -- an APK is a zip with a compiled manifest, and the three
+tools that make one ship in the SDK's build-tools on their own.
+
+```sh
+tools/android-build.sh /path/to/android-ndk      # one library per ABI
+tools/android-apk.sh   /path/to/android-sdk      # zig-out/android/craft.apk
+```
+
+With no keyboard and no mouse there is a stick in one corner, a jump button in
+the other, a drag anywhere else to look around, and a button for the menu. They
+are a setting, so they can be turned on with a mouse to see what they do, and
+off on a tablet with a keyboard.
+
 ## Introduction
 
 This is a project of writing a fully compatible Minecraft beta 1.7.3 client. This is not a full minecraft clone as it doesn't contain the code necessary for singleplayer or a server, it only allows connecting to servers (although hosting a local server can be considered as singleplayer and maybe automatized to have a singleplayer mode).

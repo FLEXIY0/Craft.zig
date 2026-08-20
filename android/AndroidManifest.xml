@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A native activity and nothing else: there is no Java in this app, which is
+  what android:hasCode="false" says. NativeActivity loads the library named
+  below and calls ANativeActivity_onCreate in it.
+
+  minSdkVersion 21 is Android 5.0. It is not a choice about what the code needs
+  - the engine would run on far less - but the floor a current NDK will build
+  against.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="zig.craft"
+    android:versionCode="1"
+    android:versionName="0.1.0"
+    android:installLocation="auto">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34" />
+
+    <!-- GL ES 2.0, which is what the chunk shader is written twice for -->
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- Only for joining a server; a single player world needs nothing -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Craft.zig"
+        android:icon="@mipmap/icon"
+        android:hasCode="false"
+        android:allowBackup="true"
+        android:isGame="true"
+        android:hardwareAccelerated="true">
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="Craft.zig"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+            <!-- Without the .so prefix and without lib: this is the name the
+                 loader turns into lib<name>.so -->
+            <meta-data android:name="android.app.lib_name" android:value="maincraft" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
