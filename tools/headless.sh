@@ -7,8 +7,8 @@
 #   Xvfb      dies quietly, so `start` always checks it is still there
 #   xdotool   sends press and release inside one frame, which raylib's
 #             isMouseButtonPressed never sees, so `click` sleeps between them
-#   xdotool   key --window uses XSendEvent, which GLFW ignores, so `key` uses
-#             the XTEST path instead
+#   xdotool   key presses and releases inside one frame too, and key --window
+#             uses XSendEvent, which GLFW ignores: `key` holds, over XTEST
 #   xwd       is the only grabber always present, and nothing reads its format
 #
 # Coordinates are relative to the client window, the same ones you read off a
@@ -97,7 +97,12 @@ move)
     ;;
 
 key)
-    xdotool key "${2:?usage: headless.sh key <key>}"
+    # Same sharp edge as a click: xdotool key presses and releases inside one
+    # frame, and raylib's isKeyPressed only sees a key that was still down when
+    # the frame polled. So hold it.
+    xdotool keydown "${2:?usage: headless.sh key <key>}"
+    sleep 0.3
+    xdotool keyup "$2"
     sleep 0.4
     ;;
 
