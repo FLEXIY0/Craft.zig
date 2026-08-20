@@ -6,6 +6,13 @@ This project makes heavy use of modules to encourage reusable and replaceable co
 
 This project tries to separate the game interface (I/O) from the engine/core so as to make it easy to change the graphics library and whatnot and port the game. See [I/O API](io_api.md).
 
+## Data oriented design
+
+The terrain, the block database and the mesher are written the data oriented
+way: chunks are slots in parallel arrays, block types are indices into comptime
+tables and 256 bit sets, and chunk meshing is a job that runs on worker threads.
+See [the data oriented architecture](dod_architecture.md).
+
 ## Lawfulness
 
 This project doesn't implement cheats or exploits and aims to respects the expected way a client should behave, as to not be targetted as an undesirable client by server owners.

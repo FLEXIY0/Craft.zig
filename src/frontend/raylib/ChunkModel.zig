@@ -1,278 +1,193 @@
-//! A chunk's visual representation
-//! This is specific to the IO and can be modified independently of the chunk's actual representation
+//! A chunk's visual representation.
+//!
+//! All the work happens in the meshing module, on worker threads: this is only
+//! the part that has to run on the thread that owns the OpenGL context, i.e.
+//! handing the finished vertex buffers to the driver and drawing them.
 
 const std = @import("std");
 const rl = @import("raylib");
 const coord = @import("coord");
 const terrain = @import("terrain");
-const Chunk = terrain.Chunk;
-const Context = terrain.Context;
-const blocks = @import("blocks");
-const tracy = @import("tracy");
 const meshing = @import("meshing");
-const properties = @import("properties.zig");
+const tracy = @import("tracy");
+
+const chunk = terrain.chunk;
 
 const ChunkModel = @This();
 
-// TODO: make the meshes on a separate thread
+/// The uploaded geometry of one 16 block section of the chunk
+pub const Section = struct {
+    /// Opaque geometry
+    meshes: []rl.Mesh = &.{},
+    /// Geometry drawn on the transparent layer
+    transparent_meshes: []rl.Mesh = &.{},
 
-meshes: []rl.Mesh,
-transparent_meshes: []rl.Mesh,
-
-/// Prepare the ChunkModel for a chunk (part of the API)
-pub fn generateForChunk(alloc: std.mem.Allocator, chunk: Chunk) !ChunkModel {
-    const meshes, const transparent_meshes = try generateMeshesForChunk(alloc, chunk);
-    errdefer {
-        for (meshes) |mesh|
-            mesh.unload();
-        alloc.free(meshes);
-
-        for (transparent_meshes) |mesh|
-            mesh.unload();
-        alloc.free(transparent_meshes);
-    }
-
-    // Upload generated meshes
-    for (meshes) |*mesh|
-        rl.uploadMesh(mesh, false);
-
-    for (transparent_meshes) |*mesh|
-        rl.uploadMesh(mesh, false);
-
-    return .{
-        .meshes = meshes,
-        .transparent_meshes = transparent_meshes,
-    };
-}
-
-pub fn draw(self: ChunkModel, pos: coord.Chunk, material: *const rl.Material) void {
-    // Draw chunk
-    const transform: rl.Matrix = .translate(@as(f32, @floatFromInt(pos.x * 16)), 0, @as(f32, @floatFromInt(pos.z * 16)));
-    for (self.meshes) |mesh|
-        rl.drawMesh(mesh, material.*, transform);
-}
-
-pub fn drawTransparentLayer(self: ChunkModel, pos: coord.Chunk, material: *const rl.Material) void {
-    // Draw chunk
-    const transform: rl.Matrix = .translate(@as(f32, @floatFromInt(pos.x * 16)), 0, @as(f32, @floatFromInt(pos.z * 16)));
-    for (self.transparent_meshes) |mesh|
-        rl.drawMesh(mesh, material.*, transform);
-}
-
-/// Renders a chunk into a mesh
-fn generateMeshesForChunk(alloc: std.mem.Allocator, chunk: Chunk) !struct { []rl.Mesh, []rl.Mesh } {
-    var meshes = try MeshBuilder.init(alloc);
-    errdefer meshes.deinit();
-
-    var meshes_t = try MeshBuilder.init(alloc);
-    errdefer meshes_t.deinit();
-
-    for (chunk.blocks_data, 0..) |block_id, i| {
-        // Ignore air
-        if (block_id == 0)
-            continue;
-
-        const block = blocks.table[block_id];
-
-        // Select mesh builder based on transparency
-        const mesh_builder = if (block.flags.transparent) &meshes_t else &meshes;
-
-        // Block coordinates
-        const xyz = Chunk.coordFromIndex(i);
-
-        // Get general block information
-        const context: Context = chunk.getContext(xyz);
-        const face_count: c_ushort = @intCast(meshing.vertices.faceCount(block.flags.model, context.occlusion));
-        // Ignore blocks that are fully occulted
-        if (face_count == 0)
-            continue;
-
-        const metadata = chunk.getBlockMeta(xyz);
-        _ = metadata;
-
-        const vertex_count: c_ushort = face_count * 4;
-
-        // Stop filling buffers: we can't use more vertex indices
-        if (mesh_builder.next_id > std.math.maxInt(c_ushort) - vertex_count) {
-            // Flush current mesh builder and
-            try mesh_builder.flush();
-        }
-
-        // Resize buffers to fit if needed
-        {
-            const realloc_zone = tracy.Zone.begin(.{
-                .name = "Realloc vertices",
-                .src = @src(),
-                .color = .indian_red,
-            });
-            defer realloc_zone.end();
-
-            try mesh_builder.vertices.ensureUnusedCapacity(rl.mem, vertex_count * 3);
-            try mesh_builder.indices.ensureUnusedCapacity(rl.mem, face_count * 6);
-            try mesh_builder.colors.ensureUnusedCapacity(rl.mem, vertex_count);
-            try mesh_builder.texcoords.ensureUnusedCapacity(rl.mem, vertex_count * 2);
-        }
-
-        // Write mesh data for block
-        {
-            const write_zone = tracy.Zone.begin(.{
-                .name = "Write block mesh",
-                .src = @src(),
-                .color = .red,
-            });
-            defer write_zone.end();
-
-            // Add vertices
-            meshing.vertices.writeVertices(&mesh_builder.vertices, block.flags.model, xyz, context.occlusion);
-
-            // Add triangles
-            meshing.vertices.materializeFaces(&mesh_builder.indices, face_count, mesh_builder.next_id, false);
-
-            // Colors (later based on chunk lighting)
-            meshing.colors.writeColors(&mesh_builder.colors, context.occlusion, vertex_count, block_id);
-            meshing.colors.adjustColors(
-                @ptrCast(mesh_builder.colors.items[(mesh_builder.colors.items.len - vertex_count)..]),
-                mesh_builder.vertices.items[(mesh_builder.vertices.items.len - (vertex_count * 3))..],
-                context,
-                block.isFull(),
-            );
-
-            // Add UV
-            meshing.uv.writeUV(&mesh_builder.texcoords, context.occlusion, block_id);
-        }
-
-        // Count up the vertex indices
-        mesh_builder.next_id += vertex_count;
-    }
-
-    return .{
-        try meshes.getMeshesAndDeinit(),
-        try meshes_t.getMeshesAndDeinit(),
-    };
-}
-
-/// Struct holding arraylists for a mesh that is being built
-const MeshBuilder = struct {
-    alloc: std.mem.Allocator,
-    built_meshes: std.ArrayList(rl.Mesh),
-    vertices: std.ArrayList(f32),
-    indices: std.ArrayList(properties.VertexIdT),
-    colors: std.ArrayList(u32),
-    texcoords: std.ArrayList(f32),
-    next_id: c_ushort,
-
-    /// Inits a mesh builder and preallocates buffers in pessimistic way
-    pub fn init(alloc: std.mem.Allocator) !MeshBuilder {
-        var ret: MeshBuilder = undefined;
-
-        ret.alloc = alloc;
-
-        // Prealloc pessemistically
-        // TODO: try without prealloc to compare
-        ret.vertices = try .initCapacity(rl.mem, (std.math.maxInt(c_ushort) * 3 + 1));
-        errdefer ret.vertices.deinit(rl.mem);
-
-        ret.indices = try .initCapacity(rl.mem, (std.math.maxInt(c_ushort) + 1));
-        errdefer ret.indices.deinit(rl.mem);
-
-        ret.colors = try .initCapacity(rl.mem, (std.math.maxInt(c_ushort) * 4 + 1));
-        errdefer ret.colors.deinit(rl.mem);
-
-        ret.texcoords = try .initCapacity(rl.mem, (std.math.maxInt(c_ushort) * 2 + 1));
-        errdefer ret.texcoords.deinit(rl.mem);
-
-        ret.built_meshes = try .initCapacity(alloc, 2);
-        errdefer ret.built_meshes.deinit(alloc);
-
-        ret.next_id = 0;
-
-        return ret;
-    }
-
-    /// Adds a new mesh by owning the buffers
-    /// Doesn't add anything if the buffers have no meaningful data
-    /// Buffers are then ready for a new mesh
-    pub fn flush(self: *MeshBuilder) !void {
-        // TODO: this is a bit flimsy when it comes to errdefers
-        // Count used tris and verts
-        const tri_count = self.indices.items.len / 3;
-        const vert_count = self.vertices.items.len / 3;
-
-        // We don't want to generate an empty mesh
-        if (vert_count == 0) {
-            return;
-        }
-
-        // Make up the mesh struct
-        const new_mesh = blk: {
-            // Own the slices
-            const vertices_data = try self.vertices.toOwnedSlice(rl.mem);
-            errdefer rl.mem.free(vertices_data);
-
-            const indices_data = try self.indices.toOwnedSlice(rl.mem);
-            errdefer rl.mem.free(indices_data);
-
-            const colors_data = try self.colors.toOwnedSlice(rl.mem);
-            errdefer rl.mem.free(colors_data);
-
-            const texcoords_data = try self.texcoords.toOwnedSlice(rl.mem);
-            errdefer rl.mem.free(texcoords_data);
-
-            break :blk rl.Mesh{
-                .animNormals = @ptrFromInt(0),
-                .animVertices = @ptrFromInt(0),
-                .boneCount = 0,
-                .boneIds = @ptrFromInt(0),
-                .boneMatrices = @ptrFromInt(0),
-                .boneWeights = @ptrFromInt(0),
-                .colors = @ptrCast(colors_data),
-                .indices = @ptrCast(indices_data),
-                .normals = @ptrFromInt(0),
-                .tangents = @ptrFromInt(0),
-                .texcoords = @ptrCast(texcoords_data),
-                .texcoords2 = @ptrFromInt(0),
-                .triangleCount = @intCast(tri_count),
-                .vaoId = 0,
-                .vboId = @ptrFromInt(0),
-                .vertexCount = @intCast(vert_count),
-                .vertices = @ptrCast(vertices_data),
-            };
-        };
-        errdefer new_mesh.unload();
-
-        // Reset the slices
-        self.vertices = .{};
-        self.indices = .{};
-        self.colors = .{};
-        self.texcoords = .{};
-        self.next_id = 0;
-
-        // Add the new mesh
-        try self.built_meshes.append(self.alloc, new_mesh);
-    }
-
-    /// Gets the meshes and deinits the mesh builder
-    /// No need to call deinit after
-    pub fn getMeshesAndDeinit(self: *MeshBuilder) ![]rl.Mesh {
-        try self.flush();
-        return self.built_meshes.toOwnedSlice(self.alloc);
-    }
-
-    /// Not needed after getMeshesAndDeinit
-    pub fn deinit(self: *MeshBuilder) void {
-        self.built_meshes.deinit(self.alloc);
-        self.vertices.deinit(self.alloc);
-        self.indices.deinit(self.alloc);
-        self.colors.deinit(self.alloc);
-        self.texcoords.deinit(self.alloc);
+    /// True when the section has nothing to draw at all, which is the common
+    /// case: most sections of most chunks are solid rock or plain air
+    pub inline fn isEmpty(self: Section) bool {
+        return self.meshes.len == 0 and self.transparent_meshes.len == 0;
     }
 };
 
+/// Geometry, one entry per section of the chunk, bottom first
+sections: [chunk.section_count]Section,
+/// Which faces of each section can see each other, for the visibility walk
+connectivity: [chunk.section_count]meshing.visibility.Connectivity = @splat(.{}),
+
+/// Uploads a finished chunk mesh to the gpu.
+/// Takes ownership of `data`, whatever happens.
+pub fn upload(alloc: std.mem.Allocator, data: meshing.MeshData) !ChunkModel {
+    const zone = tracy.Zone.begin(.{
+        .name = "Chunk model upload",
+        .src = @src(),
+        .color = .green,
+    });
+    defer zone.end();
+
+    var model: ChunkModel = .{
+        .sections = @splat(.{}),
+        .connectivity = data.connectivity,
+    };
+
+    // Every allocation happens before a single buffer changes hands, so that a
+    // failure here leaves the mesh entirely owned by `data` and freeing it once
+    // is correct
+    for (data.sections, &model.sections) |source, *section| {
+        section.meshes = allocMeshes(alloc, source.solid.len) catch |err| {
+            freeMeshArrays(alloc, &model);
+            data.deinit();
+            return err;
+        };
+        section.transparent_meshes = allocMeshes(alloc, source.transparent.len) catch |err| {
+            freeMeshArrays(alloc, &model);
+            data.deinit();
+            return err;
+        };
+    }
+
+    // Talking to the driver needs a window, which a headless run (tests, or a
+    // client that has not opened its window yet) does not have. The mesh is
+    // still built and owned, it just stays on the cpu side.
+    const can_upload = rl.isWindowReady();
+
+    // From here on the vertex buffers belong to the meshes, and nothing fails
+    for (data.sections, &model.sections) |source, *section| {
+        for (source.solid, section.meshes) |part, *mesh| {
+            mesh.* = meshFromPart(part);
+            if (can_upload)
+                rl.uploadMesh(mesh, false);
+        }
+        for (source.transparent, section.transparent_meshes) |part, *mesh| {
+            mesh.* = meshFromPart(part);
+            if (can_upload)
+                rl.uploadMesh(mesh, false);
+        }
+
+        // Only the (now empty) part arrays are left to free
+        data.alloc.free(source.solid);
+        data.alloc.free(source.transparent);
+    }
+
+    return model;
+}
+
+/// Allocates the mesh array of one layer of one section
+fn allocMeshes(alloc: std.mem.Allocator, count: usize) ![]rl.Mesh {
+    if (count == 0)
+        return &.{};
+    return alloc.alloc(rl.Mesh, count);
+}
+
+/// Frees the mesh arrays of a model that does not own any vertex buffer yet
+fn freeMeshArrays(alloc: std.mem.Allocator, model: *ChunkModel) void {
+    for (&model.sections) |*section| {
+        alloc.free(section.meshes);
+        alloc.free(section.transparent_meshes);
+        section.* = .{};
+    }
+}
+
+/// Wraps the buffers of a mesh part in a raylib mesh, without copying them
+fn meshFromPart(part: meshing.Part) rl.Mesh {
+    return .{
+        .vertexCount = @intCast(part.vertex_count),
+        .triangleCount = @intCast(part.triangle_count),
+        .vertices = @ptrCast(part.positions.ptr),
+        // Texture coordinates are in tile units and are wrapped inside their
+        // atlas tile by the chunk shader, which needs to know which tile that
+        // is: that is what the second uv set carries
+        .texcoords = @ptrCast(part.uvs.ptr),
+        .texcoords2 = @ptrCast(part.tiles.ptr),
+        .colors = @ptrCast(part.colors.ptr),
+        .indices = @ptrCast(part.indices.ptr),
+        .animNormals = @ptrFromInt(0),
+        .animVertices = @ptrFromInt(0),
+        .boneCount = 0,
+        .boneIds = @ptrFromInt(0),
+        .boneMatrices = @ptrFromInt(0),
+        .boneWeights = @ptrFromInt(0),
+        .normals = @ptrFromInt(0),
+        .tangents = @ptrFromInt(0),
+        .vaoId = 0,
+        .vboId = @ptrFromInt(0),
+    };
+}
+
+/// Transform of the chunk, shared by all of its sections: the geometry carries
+/// its real height, so a section needs no offset of its own
+inline fn transformOf(pos: coord.Chunk) rl.Matrix {
+    return .translate(
+        @floatFromInt(pos.x * chunk.width),
+        0,
+        @floatFromInt(pos.z * chunk.width),
+    );
+}
+
+/// Draws the opaque geometry of one section
+pub fn drawSection(self: ChunkModel, section: usize, pos: coord.Chunk, material: *const rl.Material) void {
+    const transform = transformOf(pos);
+    for (self.sections[section].meshes) |mesh|
+        rl.drawMesh(mesh, material.*, transform);
+}
+
+/// Draws the transparent geometry of one section
+pub fn drawSectionTransparent(self: ChunkModel, section: usize, pos: coord.Chunk, material: *const rl.Material) void {
+    const transform = transformOf(pos);
+    for (self.sections[section].transparent_meshes) |mesh|
+        rl.drawMesh(mesh, material.*, transform);
+}
+
+/// Amount of draw calls one section costs, for the debug overlay. Every mesh
+/// part is a full material bind, so this is the number that has to stay small
+pub fn sectionDrawCallCount(self: ChunkModel, section: usize) usize {
+    return self.sections[section].meshes.len + self.sections[section].transparent_meshes.len;
+}
+
+/// Amount of triangles one section draws, for the debug overlay
+pub fn sectionTriangleCount(self: ChunkModel, section: usize) usize {
+    var total: usize = 0;
+    for (self.sections[section].meshes) |mesh|
+        total += @intCast(mesh.triangleCount);
+    for (self.sections[section].transparent_meshes) |mesh|
+        total += @intCast(mesh.triangleCount);
+    return total;
+}
+
+/// Amount of triangles of the whole chunk
+pub fn triangleCount(self: ChunkModel) usize {
+    var total: usize = 0;
+    for (0..chunk.section_count) |section|
+        total += self.sectionTriangleCount(section);
+    return total;
+}
+
 pub fn deinit(self: ChunkModel, alloc: std.mem.Allocator) void {
-    for (self.meshes) |mesh|
-        mesh.unload();
-    for (self.transparent_meshes) |mesh|
-        mesh.unload();
-    alloc.free(self.meshes);
-    alloc.free(self.transparent_meshes);
+    for (self.sections) |section| {
+        for (section.meshes) |mesh|
+            mesh.unload();
+        for (section.transparent_meshes) |mesh|
+            mesh.unload();
+        alloc.free(section.meshes);
+        alloc.free(section.transparent_meshes);
+    }
 }

@@ -21,6 +21,21 @@ pub fn build(b: *std.Build) void {
         "Select the frontend",
     ) orelse .raylib;
 
+    const atlas_path = b.option(
+        []const u8,
+        "atlas",
+        "Path to the texture atlas descriptor (see src/blocks/atlas.zig)",
+    ) orelse "src/blocks/atlas.zig";
+
+    const mesher_threads = b.option(
+        u32,
+        "mesher-threads",
+        "Number of chunk meshing worker threads (0 = pick from the cpu count)",
+    ) orelse 0;
+
+    const build_options = b.addOptions();
+    build_options.addOption(u32, "mesher_threads", mesher_threads);
+
     // Dependencies
     const network_dep = b.dependency("network", .{});
     const spsc_queue_dep = b.dependency("spsc_queue", .{});
@@ -55,9 +70,20 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // The atlas descriptor is a swappable module: point the build at a generated
+    // file to change the texture atlas layout without touching any other code
+    const atlas_mod = b.addModule("atlas", .{
+        .root_source_file = b.path(atlas_path),
+        .target = target,
+    });
+
     const blocks_mod = b.addModule("blocks", .{
         .root_source_file = b.path("src/blocks/blocks.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "coord", .module = coord_mod },
+            .{ .name = "atlas", .module = atlas_mod },
+        },
     });
     terrain_mod.addImport("blocks", blocks_mod);
 
@@ -69,6 +95,21 @@ pub fn build(b: *std.Build) void {
             .{ .name = "coord", .module = coord_mod },
             .{ .name = "terrain", .module = terrain_mod },
             .{ .name = "tracy", .module = tracy_dep.module("tracy") },
+        },
+    });
+
+    // The world drives the meshing pipeline, and needs to know how many worker
+    // threads to start
+    terrain_mod.addImport("meshing", meshing_mod);
+    terrain_mod.addImport("build_options", build_options.createModule());
+
+    const worldgen_mod = b.addModule("worldgen", .{
+        .root_source_file = b.path("src/worldgen/worldgen.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "coord", .module = coord_mod },
+            .{ .name = "blocks", .module = blocks_mod },
+            .{ .name = "terrain", .module = terrain_mod },
         },
     });
 
@@ -118,6 +159,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "coord", .module = coord_mod },
             .{ .name = "terrain", .module = terrain_mod },
             .{ .name = "blocks", .module = blocks_mod },
+            .{ .name = "worldgen", .module = worldgen_mod },
             // Dependencies
             .{ .name = "network", .module = network_dep.module("network") },
             .{ .name = "spsc_queue", .module = spsc_queue_dep.module("spsc_queue") },
@@ -198,6 +240,11 @@ pub fn build(b: *std.Build) void {
     });
     const run_meshing_tests = b.addRunArtifact(meshing_mod_tests);
 
+    const worldgen_mod_tests = b.addTest(.{
+        .root_module = worldgen_mod,
+    });
+    const run_worldgen_tests = b.addRunArtifact(worldgen_mod_tests);
+
     const engine_mod_tests = b.addTest(.{
         .root_module = engine_mod,
     });
@@ -218,6 +265,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_terrain_tests.step);
     test_step.dependOn(&run_blocks_tests.step);
     test_step.dependOn(&run_meshing_tests.step);
+    test_step.dependOn(&run_worldgen_tests.step);
     test_step.dependOn(&run_engine_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
@@ -229,6 +277,7 @@ pub fn build(b: *std.Build) void {
     b.step("test_terrain", "Run terrain module tests").dependOn(&run_terrain_tests.step);
     b.step("test_blocks", "Run blocks module tests").dependOn(&run_blocks_tests.step);
     b.step("test_meshing", "Run meshing module tests").dependOn(&run_meshing_tests.step);
+    b.step("test_worldgen", "Run world generation module tests").dependOn(&run_worldgen_tests.step);
     b.step("test_engine", "Run engine tests").dependOn(&run_engine_tests.step);
     b.step("test_exe", "Run NBT module tests").dependOn(&run_exe_tests.step);
 }

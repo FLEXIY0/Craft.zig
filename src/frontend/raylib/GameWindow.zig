@@ -10,6 +10,11 @@ const entities = @import("entities");
 const RessourceManager = @import("RessourceManager.zig");
 const vec = @import("vec.zig");
 const ChunkModel = @import("ChunkModel.zig");
+const Frustum = @import("Frustum.zig");
+const FrameStats = @import("FrameStats.zig");
+const VisibleSet = @import("VisibleSet.zig");
+const ChunkBatch = @import("ChunkBatch.zig");
+const Settings = @import("Settings.zig");
 const blocks = @import("blocks");
 
 const GameWindow = @This();
@@ -32,19 +37,30 @@ game: ?*engine.Game = null,
 ressource_manager: RessourceManager,
 chunk_mat: *const rl.Material,
 compass: *const rl.Model,
-icons: *const rl.Texture,
+icons: ?*const rl.Texture,
+crosshair: ?*const rl.Texture,
 selected_block: ?coord.Block = null,
 window_size: rl.Vector2,
 heal_hurt: i16,
+/// Where the frame goes, for the debug overlay
+stats: FrameStats = .{},
+/// Sections the camera can see, rebuilt every frame
+visible: VisibleSet,
+/// What the player chose in the options screen
+settings: *const Settings,
 
-pub fn init(alloc: std.mem.Allocator) !GameWindow {
+/// The options decide the frame cap, the field of view and the sensitivity, so
+/// the window needs them from the start. A cap of zero runs the loop uncapped,
+/// which is what a frame time measurement needs: a capped frame only ever
+/// measures the cap.
+pub fn init(alloc: std.mem.Allocator, settings: *const Settings) !GameWindow {
     rl.setConfigFlags(.{ .window_resizable = true, .window_highdpi = true });
     rl.initWindow(screenWidth, screenHeight, "Maincraft by Guigui220D");
     errdefer rl.closeWindow();
 
-    rl.disableCursor();
-    rl.setTargetFPS(60);
-    rl.setExitKey(.f1);
+    // The menu owns the pointer until a world is running
+    rl.setTargetFPS(@intCast(settings.fps_cap));
+    rl.setExitKey(.null);
 
     rl.setTraceLogLevel(.warning);
 
@@ -58,16 +74,19 @@ pub fn init(alloc: std.mem.Allocator) !GameWindow {
             .position = .init(0, 120, 0),
             .target = .init(10, 120, 0),
             .up = .init(0, 1, 0),
-            .fovy = 60,
+            .fovy = @floatFromInt(settings.fov),
             .projection = .perspective,
         },
         .cube_position = .init(0, 0, 0),
         .cam_rot = .zero(),
         .cam_rel_pos = .zero(),
         .ressource_manager = res_mana,
+        .visible = .init(alloc),
+        .settings = settings,
         .chunk_mat = res_mana.materials.get("chunk").?,
         .compass = res_mana.models.get("compass.glb").?,
-        .icons = res_mana.textures.get("icons.png").?,
+        .icons = res_mana.textures.get("icons.png"),
+        .crosshair = res_mana.textures.get("crosshair.png"),
         .window_size = .{ .x = @floatFromInt(rl.getScreenWidth()), .y = @floatFromInt(rl.getScreenHeight()) },
         .heal_hurt = 0,
     };
@@ -83,16 +102,6 @@ pub fn update(self: *GameWindow, delta: f32) !void {
 
     const game = self.game.?;
 
-    if (rl.isMouseButtonPressed(.left)) {
-        rl.disableCursor();
-        self.focused = true;
-    }
-
-    if (rl.isKeyPressed(.escape) and self.focused) {
-        rl.enableCursor();
-        self.focused = false;
-    }
-
     if (rl.isKeyPressed(.f3) and self.focused) {
         self.f3_enabled = !self.f3_enabled;
     }
@@ -100,6 +109,9 @@ pub fn update(self: *GameWindow, delta: f32) !void {
     if (rl.isKeyPressed(.f4) and self.focused) {
         self.wiremesh = !self.wiremesh;
     }
+
+    if (rl.isKeyPressed(.f2))
+        self.takeScreenshot();
 
     if (rl.isKeyPressed(.tab) and self.focused) {
         self.freecam = !self.freecam;
@@ -115,7 +127,8 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         } else {
             // Look around code
             // Take mouse movement in account
-            self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * 10.0));
+            const sensitivity: f32 = @floatFromInt(self.settings.sensitivity);
+            self.cam_rot = self.cam_rot.add(rl.getMouseDelta().scale(delta * sensitivity));
             // Clamp vertical rotation
             if (self.cam_rot.y > 89.9)
                 self.cam_rot.y = 89.9;
@@ -166,6 +179,8 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         }
     }
 
+    self.camera.fovy = @floatFromInt(self.settings.fov);
+
     // Update camera position
     if (!self.freecam) {
         // TODO: give the player a cam pos function (for head bobbing and whatnot)
@@ -181,7 +196,9 @@ pub fn update(self: *GameWindow, delta: f32) !void {
         const pos_in_chunk = pos_block.getPosInChunk();
         const time = game.time.load(.unordered);
         const block_id = if (self.selected_block) |selected| game.world.getBlockId(selected) else 0;
-        self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}", .{
+        self.f3_str = try std.fmt.bufPrintZ(&self.f3_buf, "camera: {}\nplayer: {}\nblock: {}\nchunk: {}\nin chunk: {}\nfocused: {}\ntime: {}\nblock aimed at: {?}\nblock id: {} {s}\nhealth: {}\n" ++
+            "chunks: {} drawn / {} loaded, {} sections\ntriangles: {}, draw calls: {}\n" ++
+            "engine: {d:.2} ms (update {d:.2} + submit {d:.2})\npresent: {d:.2} ms", .{
             cam_pos,
             pos,
             pos_block,
@@ -191,10 +208,30 @@ pub fn update(self: *GameWindow, delta: f32) !void {
             time,
             self.selected_block,
             block_id,
-            blocks.table[block_id].name,
+            blocks.nameOf(block_id),
             game.player.health,
+            self.stats.chunks_drawn,
+            self.stats.chunks_loaded,
+            self.stats.sections_drawn,
+            self.stats.triangles,
+            self.stats.draw_calls,
+            self.stats.cpuTime(),
+            self.stats.update,
+            self.stats.submit,
+            self.stats.present,
         });
     }
+}
+
+/// Saves the last drawn frame next to the executable, like the game does
+pub fn takeScreenshot(self: *GameWindow) void {
+    var buf: [64]u8 = undefined;
+    const name = std.fmt.bufPrintZ(&buf, "craft_{}.png", .{std.time.milliTimestamp()}) catch return;
+
+    rl.takeScreenshot(name);
+    std.log.info("Screenshot saved as {s}", .{name});
+
+    _ = self;
 }
 
 pub fn tick(self: *GameWindow) void {
@@ -215,12 +252,15 @@ pub fn exitGame(self: *GameWindow) void {
     self.game = null;
 }
 
+/// Colour of the sky, until there is a proper day and night cycle
+const sky_color: rl.Color = .init(126, 176, 232, 255);
+
 pub fn beginDraw(_: GameWindow) void {
     rl.beginDrawing();
-    defer rl.clearBackground(.white);
+    defer rl.clearBackground(sky_color);
 }
 
-pub fn drawWorld(self: GameWindow) void {
+pub fn drawWorld(self: *GameWindow) void {
     if (self.game == null)
         return;
 
@@ -232,28 +272,70 @@ pub fn drawWorld(self: GameWindow) void {
     if (self.wiremesh)
         rl.gl.rlEnableWireMode();
 
-    var chunk_it = game.world.chunk_list.iterator();
-    while (chunk_it.next()) |entry| {
-        const chunk = entry.value_ptr.*;
-        const chunk_pos = entry.key_ptr.*;
-        if (self.f3_enabled) {
-            // Draw chunk bottom/bounds (debug)
-            rl.drawCubeWires(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 64, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, 16, 128, 16, .red);
-            rl.drawPlane(.{ .x = @floatFromInt(chunk_pos.x * 16 + 8), .y = 0, .z = @floatFromInt(chunk_pos.z * 16 + 8) }, .{ .x = 16, .y = 16 }, .magenta);
+    // The chunk store is a struct of arrays: drawing walks the dense list of
+    // loaded slots and only touches the coordinates and models of the chunks
+    const store = &game.world.store;
+    const frustum: Frustum = .fromCamera(self.camera, self.window_size.x / self.window_size.y);
+
+    // Walk the world from the camera outwards instead of drawing every loaded
+    // chunk: sealed rock stops the walk, and the caves behind it are never
+    // reached. That is where most of a chunk's geometry lives.
+    self.visible.gather(store, frustum, self.camera.position) catch |err| {
+        std.log.err("Could not walk the visible sections ({}), drawing everything", .{err});
+    };
+
+    var chunks_drawn: u32 = 0;
+    var last_chunk: ?coord.Chunk = null;
+    var triangles: u32 = 0;
+    var draw_calls: u32 = 0;
+
+    // The shader, the terrain texture and the camera matrices are the same for
+    // every chunk of the frame: the batch uploads them once instead of once per
+    // section, which is most of what a draw used to cost
+    var batch: ChunkBatch = .begin(self.chunk_mat);
+
+    for (self.visible.visible.items) |entry| {
+        const model = store.model.get(entry.slot) orelse continue;
+
+        if (last_chunk == null or !std.meta.eql(last_chunk.?, entry.coords)) {
+            last_chunk = entry.coords;
+            chunks_drawn += 1;
+            batch.beginChunk(entry.coords);
         }
-        // Draw the solid part of the chunk
-        if (chunk.model) |model| {
-            model.draw(entry.key_ptr.*, self.chunk_mat);
+
+        batch.drawSection(model, entry.section);
+        triangles += @intCast(model.sectionTriangleCount(entry.section));
+        draw_calls += @intCast(model.sectionDrawCallCount(entry.section));
+    }
+
+    // Draw the transparent part of the very same sections, after the opaque one
+    last_chunk = null;
+    for (self.visible.visible.items) |entry| {
+        const model = store.model.get(entry.slot) orelse continue;
+        if (model.sections[entry.section].transparent_meshes.len == 0)
+            continue;
+
+        if (last_chunk == null or !std.meta.eql(last_chunk.?, entry.coords)) {
+            last_chunk = entry.coords;
+            batch.beginChunk(entry.coords);
+        }
+        batch.drawSectionTransparent(model, entry.section);
+    }
+
+    batch.end();
+
+    if (self.f3_enabled) {
+        for (self.visible.visible.items) |entry| {
+            // Draw chunk bottom/bounds (debug)
+            rl.drawCubeWires(.{ .x = @floatFromInt(entry.coords.x * 16 + 8), .y = 64, .z = @floatFromInt(entry.coords.z * 16 + 8) }, 16, 128, 16, .red);
         }
     }
 
-    // Draw the transparent part of chunks
-    chunk_it = game.world.chunk_list.iterator();
-    while (chunk_it.next()) |entry| {
-        if (entry.value_ptr.*.model) |model| {
-            model.drawTransparentLayer(entry.key_ptr.*, self.chunk_mat);
-        }
-    }
+    self.stats.chunks_drawn = chunks_drawn;
+    self.stats.sections_drawn = @intCast(self.visible.visible.items.len);
+    self.stats.chunks_loaded = @intCast(store.live.items.len);
+    self.stats.triangles = triangles;
+    self.stats.draw_calls = draw_calls;
 
     if (self.wiremesh)
         rl.gl.rlDisableWireMode();
@@ -319,13 +401,42 @@ pub fn drawGui(self: GameWindow) void {
     if (self.f3_enabled)
         rl.drawText(self.f3_str, 10, 10, 20, .black);
 
-    // Crosshair
-    rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
+    // Crosshair: the classic one when it is around, a ring when it is not
+    if (self.crosshair) |crosshair| {
+        const size = 24;
+        const source: rl.Rectangle = .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(crosshair.width),
+            .height = @floatFromInt(crosshair.height),
+        };
+        rl.drawTexturePro(
+            crosshair.*,
+            source,
+            .{
+                .x = self.window_size.x / 2 - size / 2,
+                .y = self.window_size.y / 2 - size / 2,
+                .width = size,
+                .height = size,
+            },
+            .zero(),
+            0,
+            .white,
+        );
+    } else {
+        rl.drawCircleLinesV(self.window_size.scale(0.5), 5, .black);
+    }
 
-    // Health bar
+    // Frame rate, top right corner
+    if (self.settings.show_fps)
+        rl.drawFPS(@intFromFloat(self.window_size.x - 90), 10);
+
+    // Health bar, when the icons of a jar are around to draw it with
     if (!self.f3_enabled and !self.freecam) {
-        const status: HealthBarStatus = if (@mod(self.heal_hurt, 2) == 1) (if (self.heal_hurt > 0) .healing else .hurting) else .neutral;
-        drawHealthBar(game.player.health, self.icons, status);
+        if (self.icons) |icons| {
+            const status: HealthBarStatus = if (@mod(self.heal_hurt, 2) == 1) (if (self.heal_hurt > 0) .healing else .hurting) else .neutral;
+            drawHealthBar(game.player.health, icons, status);
+        }
         if (self.heal_hurt < 0)
             rl.drawRectangle(0, 0, 10000, 10000, .init(200, 50, 50, 127));
     }
@@ -391,6 +502,7 @@ fn drawHealthBar(health_level: u8, icons: *const rl.Texture, status: HealthBarSt
 }
 
 pub fn deinit(self: *GameWindow) void {
+    self.visible.deinit();
     rl.closeWindow();
     self.ressource_manager.unloadAll();
     self.ressource_manager.deinit();

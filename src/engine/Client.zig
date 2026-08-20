@@ -8,6 +8,7 @@ const io = @import("io");
 const tracy = @import("tracy");
 
 const Game = @import("Game.zig");
+const Singleplayer = @import("Singleplayer.zig");
 const Client = @This();
 
 const InQueue = queue.SpscQueue(net.InboundPacket, true);
@@ -25,6 +26,10 @@ server_running: std.atomic.Value(bool),
 
 /// Is the login complete
 is_connected: bool,
+
+/// Set when the world is generated locally instead of coming from a server.
+/// The socket, the packet queues and the network threads are then unused.
+singleplayer: ?Singleplayer,
 
 /// TCP socket to the server
 socket: network.Socket,
@@ -67,6 +72,7 @@ pub fn init(client: *Client, alloc: std.mem.Allocator, window: *io.GameWindow, a
 
     // General variables
     client.is_connected = false;
+    client.singleplayer = null;
 
     // Game state
     try client.game.init(alloc, client, window);
@@ -112,8 +118,31 @@ pub fn init(client: *Client, alloc: std.mem.Allocator, window: *io.GameWindow, a
 }
 
 /// Deinit the client and disconnect
+/// Initializes a client that plays a locally generated world, with no server
+/// and no socket in sight
+pub fn initLocal(client: *Client, alloc: std.mem.Allocator, window: *io.GameWindow, seed: u64) !void {
+    client.alloc = alloc;
+    client.is_connected = false;
+    client.server_running = .init(true);
+
+    try client.game.init(alloc, client, window);
+    errdefer client.game.deinit();
+
+    client.singleplayer = .init(alloc, &client.game.world, seed);
+    std.log.info("Single player world, seed {}", .{seed});
+
+    client.game.player.resetPosition(try client.singleplayer.?.spawnPosition());
+}
+
 pub fn deinit(self: *Client) void {
     self.server_running.store(false, .release);
+
+    // Nothing to disconnect from in single player
+    if (self.singleplayer != null) {
+        self.game.deinit();
+        return;
+    }
+
     std.Thread.sleep(100000000); // Give time (100ms) to the socket/thread to stop
 
     self.socket.close();
@@ -146,6 +175,13 @@ pub fn update(self: *Client, delta: f32) !bool {
         .color = .blue1,
     });
     defer zone.end();
+
+    // Single player: the world comes from the generator, not from a socket
+    if (self.singleplayer) |*singleplayer| {
+        try singleplayer.update(self.game.player.pos);
+        _ = try self.game.update(delta);
+        return self.server_running.load(.acquire);
+    }
 
     if (self.server_running.load(.acquire)) {
         // Pop new packet

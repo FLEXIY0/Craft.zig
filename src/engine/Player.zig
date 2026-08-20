@@ -14,6 +14,13 @@ const player_speed = 4.317; // TODO: Check this value in the code
 const jumping_acc = 0.42;
 /// Gravity acceleration (per tick)
 const gravity = 0.08;
+/// Longest vertical move done without checking for a collision, in blocks.
+/// Keeps the player on the floor no matter how long a frame took.
+const max_fall_step = 0.5;
+/// Longest frame the physics reacts to, in seconds. A frame that took longer
+/// than this (a hitch, a breakpoint) is treated as a slow one, not as a
+/// teleport.
+const max_delta = 0.1;
 
 // TODO for player movement:
 // blocks pushing against instead of cancelling movement
@@ -106,7 +113,9 @@ pub fn jump(self: *Player) void {
     self.on_ground = false;
 }
 
-pub fn update(self: *Player, delta: f32) void {
+pub fn update(self: *Player, frame_delta: f32) void {
+    const delta = @min(frame_delta, max_delta);
+
     // Save movement in order to cancel it (temporary)
     var prev_pos = self.pos;
 
@@ -179,18 +188,32 @@ pub fn update(self: *Player, delta: f32) void {
     prev_pos = self.pos;
     if (self.been_on_ground)
         self.vspeed -= gravity * delta * 20; // *20 because per tick
-    self.pos.y += self.vspeed * delta * 32; // 32 because the values are divided by 32 in the original (??)
 
-    if (self.vspeed > 0) {
-        if (self.sideTouchesTerrain(.up)) {
-            self.vspeed = 0;
-        }
-    } else if (self.vspeed < 0) {
-        if (self.sideTouchesTerrain(.down)) {
-            self.pos.y = @round(self.pos.y);
-            self.vspeed = 0;
-            self.been_on_ground = true;
-            self.on_ground = true;
+    // 32 because the values are divided by 32 in the original (??)
+    var remaining = self.vspeed * delta * 32;
+
+    // Walk the vertical movement in small steps: on a long frame a single jump
+    // of several blocks would tunnel straight through the ground
+    while (@abs(remaining) > 0.0001) {
+        const step = std.math.clamp(remaining, -max_fall_step, max_fall_step);
+        self.pos.y += step;
+        remaining -= step;
+
+        if (self.vspeed > 0) {
+            if (self.sideTouchesTerrain(.up)) {
+                self.vspeed = 0;
+                break;
+            }
+        } else if (self.vspeed < 0) {
+            if (self.sideTouchesTerrain(.down)) {
+                self.pos.y = @round(self.pos.y);
+                self.vspeed = 0;
+                self.been_on_ground = true;
+                self.on_ground = true;
+                break;
+            }
+        } else {
+            break;
         }
     }
 
@@ -205,7 +228,7 @@ fn touchesTerrain(self: Player) bool {
     var block_it = hitbox.getBlocks();
     while (block_it.next()) |block_pos| {
         const block_id = self.game.world.getBlockId(block_pos);
-        const blocking = blocks.table[block_id].hitbox;
+        const blocking = blocks.hasHitbox(block_id);
         if (blocking)
             return true;
     }
@@ -218,7 +241,7 @@ fn sideTouchesTerrain(self: Player, face: coord.Direction) bool {
     var block_it = hitbox.getFaceBlocks(face);
     while (block_it.next()) |block_pos| {
         const block_id = self.game.world.getBlockId(block_pos);
-        const blocking = blocks.table[block_id].flags.hitbox;
+        const blocking = blocks.hasHitbox(block_id);
         if (blocking)
             return true;
     }
