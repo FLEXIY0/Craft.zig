@@ -48,12 +48,15 @@ mkdir -p "$work"
 # 3. Everything the zip carries as it is: the libraries under lib/<abi>, and
 #    the game's files under assets, where raylib's asset manager looks for them
 mkdir -p "$work/stage/assets"
+found=0
 for abi_dir in zig-out/android/*/lib/libmaincraft.so; do
     [ -e "$abi_dir" ] || continue
+    found=$((found + 1))
     abi=$(basename "$(dirname "$(dirname "$abi_dir")")")
     mkdir -p "$work/stage/lib/$abi"
     cp "$abi_dir" "$work/stage/lib/$abi/"
 done
+[ "$found" -gt 0 ] || { echo "No libraries built: run tools/android-build.sh first" >&2; exit 1; }
 
 # The client asks for "res/shaders/chunk.vs" and the like, so the tree keeps its
 # shape inside assets

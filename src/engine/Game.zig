@@ -1,6 +1,7 @@
 //! Main structure containing the state of the game
 
 const std = @import("std");
+const atomic64 = @import("atomic64.zig");
 const net = @import("net");
 const io = @import("io");
 const tracy = @import("tracy");
@@ -32,7 +33,7 @@ entities: Entities,
 /// Player
 player: Player,
 /// Time
-time: std.atomic.Value(i64),
+time: atomic64.Value(i64),
 /// Server time: when the server gives us a time that is < than our own time, store it in server time to catch up
 server_time: i64,
 

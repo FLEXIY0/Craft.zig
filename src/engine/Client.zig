@@ -1,6 +1,7 @@
 //! Client module, where the client game logic happens
 
 const std = @import("std");
+const atomic64 = @import("atomic64.zig");
 const network = @import("network");
 const net = @import("net");
 const queue = @import("spsc_queue");
@@ -35,7 +36,7 @@ singleplayer: ?Singleplayer,
 socket: network.Socket,
 
 /// Timestamp of the last packet released
-last_packet_ms: std.atomic.Value(i64),
+last_packet_ms: atomic64.Value(i64),
 
 // In/out net packet queues
 /// Incoming net packets queue
