@@ -39,6 +39,9 @@ tools/android-build.sh /path/to/android-ndk      # one library per ABI
 tools/android-apk.sh   /path/to/android-sdk      # zig-out/android/craft.apk
 ```
 
+A built one is in [`dist/`](dist/), with what it is signed with and how to
+install it.
+
 With no keyboard and no mouse there is a stick in one corner, a jump button in
 the other, a drag anywhere else to look around, and a button for the menu. They
 are a setting, so they can be turned on with a mouse to see what they do, and
